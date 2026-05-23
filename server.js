@@ -37,7 +37,7 @@ if (process.env.NODE_ENV !== 'production') {
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-app.get('/api/health', (req, res) => {
+app.get(['/healthz', '/api/health'], (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
