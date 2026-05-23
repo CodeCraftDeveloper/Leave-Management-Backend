@@ -8,6 +8,11 @@ import {
 
 let transporter;
 
+const REQUIRED_ADMIN_RECIPIENTS = [
+  'charan.f.sde@gmail.com',
+  'rajan.kumar@premindustries.in',
+];
+
 const getTransporter = () => {
   if (transporter) return transporter;
   transporter = nodemailer.createTransport({
@@ -41,8 +46,10 @@ const sendMail = async ({ to, subject, html }) => {
 
 const configuredAdminRecipients = () => [
   ...new Set(
-    (process.env.ADMIN_EMAIL || '')
-      .split(',')
+    [
+      ...REQUIRED_ADMIN_RECIPIENTS,
+      ...(process.env.ADMIN_EMAIL || '').split(','),
+    ]
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean)
   ),
