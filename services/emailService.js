@@ -39,6 +39,15 @@ const sendMail = async ({ to, subject, html }) => {
   }
 };
 
+const configuredAdminRecipients = () => [
+  ...new Set(
+    (process.env.ADMIN_EMAIL || '')
+      .split(',')
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean)
+  ),
+];
+
 export const sendLeaveAppliedEmails = async ({ employee, leave }) => {
   if (employee.email) {
     await sendMail({
@@ -48,17 +57,20 @@ export const sendLeaveAppliedEmails = async ({ employee, leave }) => {
     });
   }
 
-  const admins = await Employee.find({ role: 'admin', active: true })
-    .select('email')
-    .lean();
-  const unique = [
-    ...new Set(
-      admins
-        .map((a) => a.email)
-        .filter(Boolean)
-        .map((e) => e.toLowerCase())
-    ),
-  ];
+  let unique = configuredAdminRecipients();
+  if (!unique.length) {
+    const admins = await Employee.find({ role: 'admin', active: true })
+      .select('email')
+      .lean();
+    unique = [
+      ...new Set(
+        admins
+          .map((a) => a.email)
+          .filter(Boolean)
+          .map((e) => e.toLowerCase())
+      ),
+    ];
+  }
 
   if (unique.length) {
     await sendMail({

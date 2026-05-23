@@ -12,7 +12,7 @@ const wrap = (content) => `
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.06);">
     <tr>
       <td style="background:linear-gradient(135deg,#6366f1,#8b5cf6);padding:24px;text-align:center;color:#fff;">
-        <h1 style="margin:0;font-size:22px;letter-spacing:0.3px;">Leave Management</h1>
+        <h1 style="margin:0;font-size:22px;letter-spacing:0.3px;">Prem Industries</h1>
       </td>
     </tr>
     <tr>
@@ -22,7 +22,7 @@ const wrap = (content) => `
     </tr>
     <tr>
       <td style="padding:16px;text-align:center;font-size:12px;color:#9ca3af;background:#f9fafb;">
-        © ${new Date().getFullYear()} Leave Management · Automated message
+        &copy; ${new Date().getFullYear()} Prem Industries &middot; Automated message
       </td>
     </tr>
   </table>
@@ -51,7 +51,7 @@ export const leaveAppliedEmployeeTemplate = ({ employee, leave }) =>
 export const leaveAppliedAdminTemplate = ({ employee, leave }) =>
   wrap(`
     <h2 style="margin-top:0;">New Leave Request</h2>
-    <p><b>${employee.name}</b> (${employee.employeeId} · ${employee.department}) submitted a leave request.</p>
+    <p><b>${employee.name}</b> (${employee.employeeId} &middot; ${employee.department}) submitted a leave request.</p>
     ${detailsTable(leave)}
     <p>Please log in to the admin dashboard to take action.</p>
   `);

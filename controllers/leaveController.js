@@ -1,6 +1,5 @@
 import asyncHandler from 'express-async-handler';
 import Leave from '../models/Leave.js';
-import Employee from '../models/Employee.js';
 import Notification from '../models/Notification.js';
 import Holiday from '../models/Holiday.js';
 import { calculateDays, datesOverlap } from '../utils/calculateDays.js';
@@ -55,22 +54,6 @@ export const applyLeave = asyncHandler(async (req, res) => {
       res.status(400);
       throw new Error('The requested range contains 0 working days (weekends/holidays only)');
     }
-  }
-
-  // Validate balance
-  const employee = await Employee.findById(req.user._id);
-  if (!employee) {
-    res.status(404);
-    throw new Error('Employee not found');
-  }
-  const currentBalance = employee.leaveBalance[leaveType];
-  if (currentBalance === undefined) {
-    res.status(400);
-    throw new Error('Invalid leave type');
-  }
-  if (currentBalance < totalDays) {
-    res.status(400);
-    throw new Error(`Insufficient leave balance. Remaining: ${currentBalance} days, requested: ${totalDays} days.`);
   }
 
   // Check overlap

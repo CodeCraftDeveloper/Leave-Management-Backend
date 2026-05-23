@@ -113,17 +113,6 @@ export const updateLeaveStatus = asyncHandler(async (req, res) => {
   leave.actionedAt = new Date();
   await leave.save();
 
-  if (status === 'approved') {
-    const employee = await Employee.findById(leave.employee._id);
-    const balance = { ...employee.leaveBalance };
-    if (balance[leave.leaveType] !== undefined) {
-      balance[leave.leaveType] = Math.max(0, balance[leave.leaveType] - leave.totalDays);
-      employee.leaveBalance = balance;
-      employee.markModified('leaveBalance');
-      await employee.save();
-    }
-  }
-
   await Notification.create({
     recipient: leave.employee._id,
     title: `Leave ${status}`,
@@ -167,6 +156,31 @@ export const getEmployeeDetail = asyncHandler(async (req, res) => {
   }
   const leaves = await Leave.find({ employee: employee._id }).sort({ createdAt: -1 }).limit(50);
   res.json({ employee, leaves });
+});
+
+// @desc Update employee department/designation
+// @route PATCH /api/admin/employees/:id/work-details
+export const updateEmployeeWorkDetails = asyncHandler(async (req, res) => {
+  const { department, designation } = req.body;
+  const trimmedDepartment = typeof department === 'string' ? department.trim() : '';
+  const trimmedDesignation = typeof designation === 'string' ? designation.trim() : '';
+
+  if (!trimmedDepartment || !trimmedDesignation) {
+    res.status(400);
+    throw new Error('Department and designation are required');
+  }
+
+  const employee = await Employee.findById(req.params.id);
+  if (!employee) {
+    res.status(404);
+    throw new Error('Employee not found');
+  }
+
+  employee.department = trimmedDepartment;
+  employee.designation = trimmedDesignation;
+  await employee.save();
+
+  res.json(employee);
 });
 
 // @desc Apply leave on behalf of employee (Auto-approved)
@@ -226,17 +240,6 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
     }
   }
 
-  // Validate balance
-  const currentBalance = employee.leaveBalance[leaveType];
-  if (currentBalance === undefined) {
-    res.status(400);
-    throw new Error('Invalid leave type');
-  }
-  if (currentBalance < totalDays) {
-    res.status(400);
-    throw new Error(`Insufficient leave balance. Remaining: ${currentBalance} days, requested: ${totalDays} days.`);
-  }
-
   // Check overlap
   const overlapping = await Leave.find({
     employee: employee._id,
@@ -269,13 +272,6 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
     throw new Error('Employee already has a leave request overlapping these dates');
   }
 
-  // Deduct balance immediately
-  const balance = { ...employee.leaveBalance };
-  balance[leaveType] = Math.max(0, balance[leaveType] - totalDays);
-  employee.leaveBalance = balance;
-  employee.markModified('leaveBalance');
-  await employee.save();
-
   // Create approved leave
   const leave = await Leave.create({
     employee: employee._id,
@@ -304,4 +300,3 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
 
   res.status(201).json(leave);
 });
-
