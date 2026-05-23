@@ -69,6 +69,15 @@ const run = async () => {
     Holiday.deleteMany(),
   ]);
 
+  // Drop old indexes so the new sparse-unique email index can be rebuilt
+  // (a pre-existing non-sparse unique index would reject multiple emailless docs).
+  try {
+    await Employee.collection.dropIndexes();
+  } catch {
+    /* collection may not exist yet on a fresh DB */
+  }
+  await Employee.syncIndexes();
+
   console.log('Seeding official holidays...');
   const currentYear = new Date().getFullYear();
   await Holiday.create([
