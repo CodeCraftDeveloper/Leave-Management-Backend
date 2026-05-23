@@ -51,9 +51,14 @@ export const sendLeaveAppliedEmails = async ({ employee, leave }) => {
   const admins = await Employee.find({ role: 'admin', active: true })
     .select('email')
     .lean();
-  const recipients = admins.map((a) => a.email).filter(Boolean);
-  if (process.env.ADMIN_EMAIL) recipients.push(process.env.ADMIN_EMAIL);
-  const unique = [...new Set(recipients.map((e) => e.toLowerCase()))];
+  const unique = [
+    ...new Set(
+      admins
+        .map((a) => a.email)
+        .filter(Boolean)
+        .map((e) => e.toLowerCase())
+    ),
+  ];
 
   if (unique.length) {
     await sendMail({
