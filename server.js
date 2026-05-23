@@ -41,6 +41,15 @@ app.get(['/healthz', '/api/health'], (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+app.get('/', (req, res) => {
+  res.json({
+    name: 'Leave Management API',
+    status: 'ok',
+    health: '/healthz',
+    api: '/api',
+  });
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/leaves', leaveRoutes);
 app.use('/api/employees', employeeRoutes);
