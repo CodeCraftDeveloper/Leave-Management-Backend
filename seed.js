@@ -88,16 +88,44 @@ const run = async () => {
     { name: 'Christmas Day', date: new Date(`${currentYear}-12-25`), description: 'Christmas celebration' },
   ]);
 
-  console.log('Seeding admin...');
-  await Employee.create({
-    employeeId: 'ADMIN001',
-    name: 'Admin User',
-    email: 'charan.f.sde@gmail.com',
-    password: 'admin123',
-    department: 'Management',
-    designation: 'HR Admin',
-    role: 'admin',
-  });
+  console.log('Seeding admins...');
+  const admins = [
+    {
+      employeeId: 'ADMIN001',
+      name: 'Admin User',
+      email: 'charan.f.sde@gmail.com',
+      password: 'admin123',
+      department: 'Management',
+      designation: 'HR Admin',
+    },
+    {
+      employeeId: 'ADMIN002',
+      name: 'Raghav Goel',
+      email: 'raghav.goel@premindustries.in',
+      password: TEMP_PASSWORD,
+      department: 'Management',
+      designation: 'Admin',
+    },
+    {
+      employeeId: 'ADMIN003',
+      name: 'Saurabh',
+      email: 'saurabh@premindustries.in',
+      password: TEMP_PASSWORD,
+      department: 'Management',
+      designation: 'Admin',
+    },
+    {
+      employeeId: 'ADMIN004',
+      name: 'Rajan Kumar',
+      email: 'rajan.kumar@premindustries.in',
+      password: TEMP_PASSWORD,
+      department: 'Management',
+      designation: 'Admin',
+    },
+  ];
+  for (const a of admins) {
+    await Employee.create({ ...a, role: 'admin' });
+  }
 
   console.log(`Seeding ${roster.length} employees with temp password "${TEMP_PASSWORD}"...`);
   for (const entry of roster) {
@@ -115,7 +143,8 @@ const run = async () => {
   }
 
   console.log('\nSeed complete');
-  console.log(`Admin -> charan.f.sde@gmail.com / admin123`);
+  console.log(`Admin (primary) -> charan.f.sde@gmail.com / admin123`);
+  console.log(`Admins -> raghav.goel@ | saurabh@ | rajan.kumar@premindustries.in / ${TEMP_PASSWORD}`);
   console.log(`Employees -> <CardNo> / ${TEMP_PASSWORD} (e.g. H1 / ${TEMP_PASSWORD})`);
   await mongoose.disconnect();
   process.exit(0);

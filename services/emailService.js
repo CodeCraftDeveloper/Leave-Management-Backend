@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import Employee from '../models/Employee.js';
 import {
   leaveAppliedEmployeeTemplate,
   leaveAppliedAdminTemplate,
@@ -39,14 +40,24 @@ const sendMail = async ({ to, subject, html }) => {
 };
 
 export const sendLeaveAppliedEmails = async ({ employee, leave }) => {
-  await sendMail({
-    to: employee.email,
-    subject: 'Leave Application Submitted',
-    html: leaveAppliedEmployeeTemplate({ employee, leave }),
-  });
-  if (process.env.ADMIN_EMAIL) {
+  if (employee.email) {
     await sendMail({
-      to: process.env.ADMIN_EMAIL,
+      to: employee.email,
+      subject: 'Leave Application Submitted',
+      html: leaveAppliedEmployeeTemplate({ employee, leave }),
+    });
+  }
+
+  const admins = await Employee.find({ role: 'admin', active: true })
+    .select('email')
+    .lean();
+  const recipients = admins.map((a) => a.email).filter(Boolean);
+  if (process.env.ADMIN_EMAIL) recipients.push(process.env.ADMIN_EMAIL);
+  const unique = [...new Set(recipients.map((e) => e.toLowerCase()))];
+
+  if (unique.length) {
+    await sendMail({
+      to: unique.join(','),
       subject: `New Leave Request - ${employee.name}`,
       html: leaveAppliedAdminTemplate({ employee, leave }),
     });
