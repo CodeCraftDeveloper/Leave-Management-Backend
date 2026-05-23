@@ -229,14 +229,14 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
     const workingDaysCount = calculateDays(start, end, holidays);
     if (workingDaysCount === 0) {
       res.status(400);
-      throw new Error('Cannot apply for half-day leave on a weekend or holiday');
+      throw new Error('Cannot apply for half-day leave on a Sunday');
     }
     totalDays = 0.5;
   } else {
     totalDays = calculateDays(start, end, holidays);
     if (totalDays === 0) {
       res.status(400);
-      throw new Error('The requested range contains 0 working days (weekends/holidays only)');
+      throw new Error('The requested range contains no countable leave days');
     }
   }
 

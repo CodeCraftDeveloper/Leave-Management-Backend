@@ -41,18 +41,17 @@ export const applyLeave = asyncHandler(async (req, res) => {
       res.status(400);
       throw new Error('Valid half-day session (first_half or second_half) is required');
     }
-    // Verify it is a working day
     const workingDaysCount = calculateDays(start, end, holidays);
     if (workingDaysCount === 0) {
       res.status(400);
-      throw new Error('Cannot apply for half-day leave on a weekend or holiday');
+      throw new Error('Cannot apply for half-day leave on a Sunday');
     }
     totalDays = 0.5;
   } else {
     totalDays = calculateDays(start, end, holidays);
     if (totalDays === 0) {
       res.status(400);
-      throw new Error('The requested range contains 0 working days (weekends/holidays only)');
+      throw new Error('The requested range contains no countable leave days');
     }
   }
 

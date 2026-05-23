@@ -8,24 +8,14 @@ export const calculateDays = (startDate, endDate, holidays = []) => {
     return 0;
   }
 
-  // Convert holidays array to a Set of time values (in ms) for O(1) lookup
-  const holidayTimes = new Set(
-    holidays.map((h) => {
-      const d = new Date(h.date || h);
-      d.setHours(0, 0, 0, 0);
-      return d.getTime();
-    })
-  );
-
   let count = 0;
   const current = new Date(start);
   while (current <= end) {
     const dayOfWeek = current.getDay();
-    // 0 is Sunday, 6 is Saturday
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-    const isHoliday = holidayTimes.has(current.getTime());
+    // Sunday is the weekly off day. Saturdays and holidays count as leave days.
+    const isWeeklyOff = dayOfWeek === 0;
 
-    if (!isWeekend && !isHoliday) {
+    if (!isWeeklyOff) {
       count++;
     }
     current.setDate(current.getDate() + 1);
@@ -36,4 +26,3 @@ export const calculateDays = (startDate, endDate, holidays = []) => {
 export const datesOverlap = (aStart, aEnd, bStart, bEnd) => {
   return new Date(aStart) <= new Date(bEnd) && new Date(bStart) <= new Date(aEnd);
 };
-
