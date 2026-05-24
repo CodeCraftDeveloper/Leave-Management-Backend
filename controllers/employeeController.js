@@ -10,12 +10,10 @@ export const updateProfile = asyncHandler(async (req, res) => {
     throw new Error('Employee not found');
   }
   const { name, phone, department, designation, profileImage } = req.body;
-  if (department !== undefined || designation !== undefined) {
+  if (name !== undefined || phone !== undefined || department !== undefined || designation !== undefined) {
     res.status(403);
-    throw new Error('Department and designation can only be changed by an admin');
+    throw new Error('Personal information can only be changed by an admin');
   }
-  if (name) employee.name = name;
-  if (phone !== undefined) employee.phone = phone;
   if (profileImage !== undefined) employee.profileImage = profileImage;
   await employee.save();
   res.json(employee);
