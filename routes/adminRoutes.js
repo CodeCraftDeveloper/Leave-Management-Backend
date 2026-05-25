@@ -4,7 +4,10 @@ import {
   getAllLeaves,
   updateLeaveStatus,
   getEmployees,
+  createEmployee,
   getEmployeeDetail,
+  updateEmployee,
+  deleteEmployee,
   updateEmployeeWorkDetails,
   applyLeaveOnBehalf,
 } from '../controllers/adminController.js';
@@ -19,7 +22,10 @@ router.get('/leaves', getAllLeaves);
 router.post('/leaves', applyLeaveOnBehalf);
 router.patch('/leaves/:id', updateLeaveStatus);
 router.get('/employees', getEmployees);
+router.post('/employees', createEmployee);
 router.get('/employees/:id', getEmployeeDetail);
+router.patch('/employees/:id', updateEmployee);
+router.delete('/employees/:id', deleteEmployee);
 router.patch('/employees/:id/work-details', updateEmployeeWorkDetails);
 
 export default router;

@@ -33,7 +33,7 @@ export const login = asyncHandler(async (req, res) => {
     query = { employeeId: identifier.toUpperCase() };
   }
   const user = await Employee.findOne(query).select('+password');
-  if (!user || !(await user.matchPassword(password))) {
+  if (!user || !user.active || !(await user.matchPassword(password))) {
     res.status(401);
     throw new Error('Invalid credentials');
   }

@@ -6,6 +6,64 @@ import Holiday from '../models/Holiday.js';
 import { calculateDays, datesOverlap } from '../utils/calculateDays.js';
 import { sendLeaveStatusEmail } from '../services/emailService.js';
 
+const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
+
+const normalizeEmployeeInput = (payload, { requirePassword = false } = {}) => {
+  const employeeId = typeof payload.employeeId === 'string' ? payload.employeeId.trim().toUpperCase() : '';
+  const name = typeof payload.name === 'string' ? payload.name.trim() : '';
+  const email = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
+  const phone = typeof payload.phone === 'string' ? payload.phone.trim() : '';
+  const department = typeof payload.department === 'string' ? payload.department.trim() : '';
+  const designation = typeof payload.designation === 'string' ? payload.designation.trim() : '';
+  const password = typeof payload.password === 'string' ? payload.password : '';
+  const joiningDate = payload.joiningDate ? new Date(payload.joiningDate) : undefined;
+
+  if (!employeeId || !name || !department || !designation) {
+    throw new Error('Employee ID, name, department and designation are required');
+  }
+  if (email && !EMAIL_PATTERN.test(email)) {
+    throw new Error('A valid email is required');
+  }
+  if ((requirePassword || password) && password.length < 6) {
+    throw new Error('Password must be at least 6 characters');
+  }
+  if (payload.joiningDate && Number.isNaN(joiningDate.getTime())) {
+    throw new Error('A valid joining date is required');
+  }
+
+  return {
+    employeeId,
+    name,
+    email: email || undefined,
+    phone,
+    department,
+    designation,
+    password,
+    joiningDate,
+  };
+};
+
+const assertUniqueEmployeeIdentity = async ({ employeeId, email }, excludeId) => {
+  const matches = [{ employeeId }];
+  if (email) matches.push({ email });
+  const query = { $or: matches };
+  if (excludeId) query._id = { $ne: excludeId };
+
+  if (await Employee.exists(query)) {
+    const error = new Error('Employee ID or email already exists');
+    error.statusCode = 409;
+    throw error;
+  }
+};
+
+const throwEmployeeSaveError = (error, res) => {
+  if (error?.code === 11000) {
+    res.status(409);
+    throw new Error('Employee ID or email already exists');
+  }
+  throw error;
+};
+
 // @desc Admin dashboard stats
 // @route GET /api/admin/dashboard
 export const getDashboard = asyncHandler(async (req, res) => {
@@ -129,7 +187,7 @@ export const updateLeaveStatus = asyncHandler(async (req, res) => {
 // @route GET /api/admin/employees
 export const getEmployees = asyncHandler(async (req, res) => {
   const { search, department, page = 1, limit = 20 } = req.query;
-  const filter = { role: 'employee' };
+  const filter = { role: 'employee', active: true };
   if (department) filter.department = department;
   if (search) {
     filter.$or = [
@@ -146,16 +204,107 @@ export const getEmployees = asyncHandler(async (req, res) => {
   res.json({ items, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
 });
 
+// @desc Add employee
+// @route POST /api/admin/employees
+export const createEmployee = asyncHandler(async (req, res) => {
+  let input;
+  try {
+    input = normalizeEmployeeInput(req.body, { requirePassword: true });
+  } catch (error) {
+    res.status(400);
+    throw error;
+  }
+
+  try {
+    await assertUniqueEmployeeIdentity(input);
+  } catch (error) {
+    res.status(error.statusCode || 400);
+    throw error;
+  }
+
+  let created;
+  try {
+    created = await Employee.create({
+      ...input,
+      role: 'employee',
+    });
+  } catch (error) {
+    throwEmployeeSaveError(error, res);
+  }
+  const employee = await Employee.findById(created._id);
+  res.status(201).json(employee);
+});
+
 // @desc Employee detail with leaves
 // @route GET /api/admin/employees/:id
 export const getEmployeeDetail = asyncHandler(async (req, res) => {
-  const employee = await Employee.findById(req.params.id);
+  const employee = await Employee.findOne({ _id: req.params.id, role: 'employee', active: true });
   if (!employee) {
     res.status(404);
     throw new Error('Employee not found');
   }
   const leaves = await Leave.find({ employee: employee._id }).sort({ createdAt: -1 }).limit(50);
   res.json({ employee, leaves });
+});
+
+// @desc Update employee profile and employment details
+// @route PATCH /api/admin/employees/:id
+export const updateEmployee = asyncHandler(async (req, res) => {
+  if (Object.prototype.hasOwnProperty.call(req.body, 'password')) {
+    res.status(403);
+    throw new Error('Password can only be changed by the employee from their profile');
+  }
+
+  let input;
+  try {
+    input = normalizeEmployeeInput(req.body);
+  } catch (error) {
+    res.status(400);
+    throw error;
+  }
+
+  const employee = await Employee.findOne({ _id: req.params.id, role: 'employee', active: true });
+  if (!employee) {
+    res.status(404);
+    throw new Error('Employee not found');
+  }
+
+  try {
+    await assertUniqueEmployeeIdentity(input, employee._id);
+  } catch (error) {
+    res.status(error.statusCode || 400);
+    throw error;
+  }
+
+  employee.employeeId = input.employeeId;
+  employee.name = input.name;
+  employee.email = input.email;
+  employee.phone = input.phone;
+  employee.department = input.department;
+  employee.designation = input.designation;
+  if (input.joiningDate) employee.joiningDate = input.joiningDate;
+  try {
+    await employee.save();
+  } catch (error) {
+    throwEmployeeSaveError(error, res);
+  }
+
+  res.json(await Employee.findById(employee._id));
+});
+
+// @desc Deactivate employee while preserving leave history
+// @route DELETE /api/admin/employees/:id
+export const deleteEmployee = asyncHandler(async (req, res) => {
+  const employee = await Employee.findOne({ _id: req.params.id, role: 'employee', active: true });
+  if (!employee) {
+    res.status(404);
+    throw new Error('Employee not found');
+  }
+
+  employee.active = false;
+  await employee.save();
+
+  res.json({ message: 'Employee deleted successfully' });
 });
 
 // @desc Update employee department/designation
@@ -170,7 +319,7 @@ export const updateEmployeeWorkDetails = asyncHandler(async (req, res) => {
     throw new Error('Department and designation are required');
   }
 
-  const employee = await Employee.findById(req.params.id);
+  const employee = await Employee.findOne({ _id: req.params.id, role: 'employee', active: true });
   if (!employee) {
     res.status(404);
     throw new Error('Employee not found');
@@ -193,7 +342,7 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
     throw new Error('All fields are required');
   }
 
-  const employee = await Employee.findById(employeeId);
+  const employee = await Employee.findOne({ _id: employeeId, role: 'employee', active: true });
   if (!employee) {
     res.status(404);
     throw new Error('Employee not found');
