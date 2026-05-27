@@ -12,6 +12,13 @@ import employeeRoutes from './routes/employeeRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import holidayRoutes from './routes/holidayRoutes.js';
+import attendanceRoutes from './routes/attendanceRoutes.js';
+import payrollRoutes from './routes/payrollRoutes.js';
+import payslipRoutes from './routes/payslipRoutes.js';
+import salaryStructureRoutes from './routes/salaryStructureRoutes.js';
+import settingsRoutes from './routes/settingsRoutes.js';
+import leaveBalanceRoutes from './routes/leaveBalanceRoutes.js';
+import dashboardRoutes from './routes/dashboardRoutes.js';
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 
 dotenv.config();
@@ -56,6 +63,13 @@ app.use('/api/employees', employeeRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/holidays', holidayRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/payroll', payrollRoutes);
+app.use('/api/payslips', payslipRoutes);
+app.use('/api/salary-structures', salaryStructureRoutes);
+app.use('/api/settings', settingsRoutes);
+app.use('/api/leave-balances', leaveBalanceRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

@@ -22,6 +22,9 @@ const leaveSchema = new mongoose.Schema(
     adminComment: { type: String, default: '' },
     actionedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee' },
     actionedAt: { type: Date },
+    staffingOverride: { type: Boolean, default: false },
+    staffingOverrideReason: { type: String, default: '', trim: true, maxlength: 500 },
+    staffingSnapshot: { type: mongoose.Schema.Types.Mixed, default: undefined },
     isHalfDay: { type: Boolean, default: false },
     halfDaySession: {
       type: String,

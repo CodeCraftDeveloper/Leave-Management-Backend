@@ -4,7 +4,9 @@ import Employee from '../models/Employee.js';
 import Notification from '../models/Notification.js';
 import Holiday from '../models/Holiday.js';
 import { calculateDays, datesOverlap } from '../utils/calculateDays.js';
+import { assessDepartmentStaffing } from '../utils/staffingCoverage.js';
 import { sendLeaveStatusEmail } from '../services/emailService.js';
+import { onLeaveApproved } from '../services/leaveLifecycleService.js';
 
 const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
 
@@ -63,6 +65,17 @@ const throwEmployeeSaveError = (error, res) => {
   }
   throw error;
 };
+
+const staffingOverrideInput = (payload) => ({
+  requested: payload.overrideStaffingLimit === true || String(payload.overrideStaffingLimit) === 'true',
+  reason: typeof payload.staffingOverrideReason === 'string' ? payload.staffingOverrideReason.trim() : '',
+});
+
+const rejectStaffingLimit = (res, staffingCoverage) => res.status(409).json({
+  code: 'STAFFING_COVERAGE_LIMIT',
+  message: `Approving this leave would leave fewer than ${staffingCoverage.minimumOnDuty} employee(s) available in ${staffingCoverage.department}. Add an override reason to proceed.`,
+  staffingCoverage,
+});
 
 // @desc Admin dashboard stats
 // @route GET /api/admin/dashboard
@@ -165,11 +178,44 @@ export const updateLeaveStatus = asyncHandler(async (req, res) => {
     throw new Error(`Leave already ${leave.status}`);
   }
 
+  let staffingCoverage;
+  let staffingOverride = { requested: false, reason: '' };
+  if (status === 'approved') {
+    staffingCoverage = await assessDepartmentStaffing({
+      employee: leave.employee,
+      startDate: leave.startDate,
+      endDate: leave.endDate,
+      isHalfDay: leave.isHalfDay,
+      halfDaySession: leave.halfDaySession,
+      excludeLeaveId: leave._id,
+    });
+    staffingOverride = staffingOverrideInput(req.body);
+    if (staffingCoverage.blocked && !staffingOverride.requested) {
+      return rejectStaffingLimit(res, staffingCoverage);
+    }
+    if (staffingCoverage.blocked && !staffingOverride.reason) {
+      res.status(400);
+      throw new Error('A staffing override reason is required to approve this leave');
+    }
+  }
+
   leave.status = status;
   leave.adminComment = adminComment || '';
   leave.actionedBy = req.user._id;
   leave.actionedAt = new Date();
+  leave.staffingOverride = status === 'approved' && staffingCoverage?.blocked && staffingOverride.requested;
+  leave.staffingOverrideReason = leave.staffingOverride ? staffingOverride.reason : '';
+  leave.staffingSnapshot = status === 'approved' ? staffingCoverage : undefined;
   await leave.save();
+
+  // On approval: deduct balance + stamp ON_LEAVE attendance rows.
+  if (status === 'approved') {
+    try {
+      await onLeaveApproved(leave, req.user._id);
+    } catch (err) {
+      console.error('Leave lifecycle hook failed:', err.message);
+    }
+  }
 
   await Notification.create({
     recipient: leave.employee._id,
@@ -421,6 +467,22 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
     throw new Error('Employee already has a leave request overlapping these dates');
   }
 
+  const staffingCoverage = await assessDepartmentStaffing({
+    employee,
+    startDate: start,
+    endDate: end,
+    isHalfDay: isHalfDayBool,
+    halfDaySession: isHalfDayBool ? halfDaySession : '',
+  });
+  const staffingOverride = staffingOverrideInput(req.body);
+  if (staffingCoverage.blocked && !staffingOverride.requested) {
+    return rejectStaffingLimit(res, staffingCoverage);
+  }
+  if (staffingCoverage.blocked && !staffingOverride.reason) {
+    res.status(400);
+    throw new Error('A staffing override reason is required to approve this leave');
+  }
+
   // Create approved leave
   const leave = await Leave.create({
     employee: employee._id,
@@ -433,9 +495,20 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
     actionedBy: req.user._id,
     actionedAt: new Date(),
     adminComment: 'Applied by Admin on behalf of Employee',
+    staffingOverride: staffingCoverage.blocked && staffingOverride.requested,
+    staffingOverrideReason: staffingCoverage.blocked && staffingOverride.requested ? staffingOverride.reason : '',
+    staffingSnapshot: staffingCoverage,
     isHalfDay: isHalfDayBool,
     halfDaySession: isHalfDayBool ? halfDaySession : '',
   });
+
+  // Auto-approved: deduct balance + stamp ON_LEAVE attendance.
+  try {
+    leave.employee = employee; // populate for the lifecycle helper
+    await onLeaveApproved(leave, req.user._id);
+  } catch (err) {
+    console.error('Leave lifecycle hook failed:', err.message);
+  }
 
   // Notify Employee
   await Notification.create({

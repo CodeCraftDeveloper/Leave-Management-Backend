@@ -4,6 +4,7 @@ import Notification from '../models/Notification.js';
 import Holiday from '../models/Holiday.js';
 import { calculateDays, datesOverlap } from '../utils/calculateDays.js';
 import { sendLeaveAppliedEmails, sendLeaveStatusEmail } from '../services/emailService.js';
+import { onApprovedLeaveCancelled } from '../services/leaveLifecycleService.js';
 
 // @desc Apply leave
 // @route POST /api/leaves
@@ -156,12 +157,21 @@ export const cancelLeave = asyncHandler(async (req, res) => {
     res.status(403);
     throw new Error('Not authorized');
   }
-  if (leave.status !== 'pending') {
+  // Allow cancelling either pending OR approved future leaves (refund balance).
+  const wasApproved = leave.status === 'approved';
+  if (!['pending', 'approved'].includes(leave.status)) {
     res.status(400);
-    throw new Error('Only pending leaves can be cancelled');
+    throw new Error(`Cannot cancel a ${leave.status} leave`);
+  }
+  if (wasApproved && new Date(leave.startDate) <= new Date()) {
+    res.status(400);
+    throw new Error('Cannot cancel a leave that has already started');
   }
   leave.status = 'cancelled';
   await leave.save();
+  if (wasApproved) {
+    try { await onApprovedLeaveCancelled(leave); } catch (e) { console.error('Refund failed:', e.message); }
+  }
   res.json(leave);
 });
 
