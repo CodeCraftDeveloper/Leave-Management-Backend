@@ -109,7 +109,7 @@ export const applyLeave = asyncHandler(async (req, res) => {
     type: 'info',
   });
 
-  sendLeaveAppliedEmails({ employee: req.user, leave }).catch(() => {});
+  await sendLeaveAppliedEmails({ employee: req.user, leave });
 
   res.status(201).json(leave);
 });

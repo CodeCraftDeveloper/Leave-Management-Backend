@@ -224,7 +224,7 @@ export const updateLeaveStatus = asyncHandler(async (req, res) => {
     type: status === 'approved' ? 'success' : 'error',
   });
 
-  sendLeaveStatusEmail({ employee: leave.employee, leave }).catch(() => {});
+  await sendLeaveStatusEmail({ employee: leave.employee, leave });
 
   res.json(leave);
 });
@@ -518,7 +518,7 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
     type: 'success',
   });
 
-  sendLeaveStatusEmail({ employee, leave }).catch(() => {});
+  await sendLeaveStatusEmail({ employee, leave });
 
   res.status(201).json(leave);
 });
