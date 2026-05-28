@@ -21,7 +21,7 @@ const parseMonthYear = (q) => {
 export const previewPayroll = asyncHandler(async (req, res) => {
   const { month, year } = parseMonthYear(req.query);
   const employeeId = req.query.employeeId || req.user._id;
-  if (!['admin', 'hr'].includes(req.user.role) && String(employeeId) !== String(req.user._id)) {
+  if (!['head', 'hr'].includes(req.user.role) && String(employeeId) !== String(req.user._id)) {
     res.status(403);
     throw new Error('Not authorized');
   }
@@ -38,9 +38,9 @@ export const previewPayroll = asyncHandler(async (req, res) => {
 // POST /api/payroll/generate
 //   body: { employeeId, month, year, monthlySalary?, freeLeaves?, force?, remarks? }
 export const generateOne = asyncHandler(async (req, res) => {
-  if (!['admin', 'hr'].includes(req.user.role)) {
+  if (!['head', 'hr'].includes(req.user.role)) {
     res.status(403);
-    throw new Error('Admin/HR access required');
+    throw new Error('Head/HR access required');
   }
   const { employeeId, month, year } = req.body;
   if (!employeeId || !month || !year) {
@@ -54,9 +54,9 @@ export const generateOne = asyncHandler(async (req, res) => {
 // Bulk: generate payroll for ALL active employees for a month.
 // POST /api/payroll/generate-bulk  body: { month, year, force? }
 export const generateBulk = asyncHandler(async (req, res) => {
-  if (!['admin', 'hr'].includes(req.user.role)) {
+  if (!['head', 'hr'].includes(req.user.role)) {
     res.status(403);
-    throw new Error('Admin/HR access required');
+    throw new Error('Head/HR access required');
   }
   const { month, year } = req.body;
   if (!month || !year) {
@@ -90,7 +90,7 @@ export const listPayrolls = asyncHandler(async (req, res) => {
   if (req.query.month) filter.month = Number(req.query.month);
   if (req.query.year) filter.year = Number(req.query.year);
 
-  if (['admin', 'hr'].includes(req.user.role)) {
+  if (['head', 'hr'].includes(req.user.role)) {
     if (req.query.employeeId) filter.employee = req.query.employeeId;
   } else {
     filter.employee = req.user._id;
@@ -114,7 +114,7 @@ export const getPayroll = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Payroll not found');
   }
-  if (!['admin', 'hr'].includes(req.user.role) && payroll.employee._id.toString() !== req.user._id.toString()) {
+  if (!['head', 'hr'].includes(req.user.role) && payroll.employee._id.toString() !== req.user._id.toString()) {
     res.status(403);
     throw new Error('Not authorized');
   }
@@ -124,9 +124,9 @@ export const getPayroll = asyncHandler(async (req, res) => {
 // Mark a payroll row as PAID.
 // PATCH /api/payroll/:id/pay
 export const markPaid = asyncHandler(async (req, res) => {
-  if (!['admin', 'hr'].includes(req.user.role)) {
+  if (!['head', 'hr'].includes(req.user.role)) {
     res.status(403);
-    throw new Error('Admin/HR access required');
+    throw new Error('Head/HR access required');
   }
   const payroll = await Payroll.findById(req.params.id);
   if (!payroll) {
@@ -146,9 +146,9 @@ export const markPaid = asyncHandler(async (req, res) => {
 
 // PATCH /api/payroll/:id/cancel
 export const cancelPayroll = asyncHandler(async (req, res) => {
-  if (!['admin', 'hr'].includes(req.user.role)) {
+  if (!['head', 'hr'].includes(req.user.role)) {
     res.status(403);
-    throw new Error('Admin/HR access required');
+    throw new Error('Head/HR access required');
   }
   const payroll = await Payroll.findById(req.params.id);
   if (!payroll) {
@@ -168,7 +168,7 @@ export const getPayslip = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Payroll not found');
   }
-  if (!['admin', 'hr'].includes(req.user.role) && payroll.employee.toString() !== req.user._id.toString()) {
+  if (!['head', 'hr'].includes(req.user.role) && payroll.employee.toString() !== req.user._id.toString()) {
     res.status(403);
     throw new Error('Not authorized');
   }
@@ -179,7 +179,7 @@ export const getPayslip = asyncHandler(async (req, res) => {
 // GET /api/payslips/latest  (employee self)
 export const getLatestPayslip = asyncHandler(async (req, res) => {
   const employeeId = req.query.employeeId || req.user._id;
-  if (!['admin', 'hr'].includes(req.user.role) && String(employeeId) !== String(req.user._id)) {
+  if (!['head', 'hr'].includes(req.user.role) && String(employeeId) !== String(req.user._id)) {
     res.status(403);
     throw new Error('Not authorized');
   }

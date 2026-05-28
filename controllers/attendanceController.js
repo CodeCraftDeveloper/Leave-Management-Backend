@@ -141,7 +141,7 @@ export const getMonthlySummary = asyncHandler(async (req, res) => {
   const month = Number(req.query.month) || new Date().getMonth() + 1;
   const year = Number(req.query.year) || new Date().getFullYear();
   let employeeId = req.user._id;
-  if (req.query.employeeId && ['admin', 'hr'].includes(req.user.role)) {
+  if (req.query.employeeId && ['head', 'hr'].includes(req.user.role)) {
     employeeId = req.query.employeeId;
   }
   const { start, end } = monthRange(year, month);
@@ -167,9 +167,9 @@ export const getMonthlySummary = asyncHandler(async (req, res) => {
 // ─── Admin/HR manual entry/update ────────────────────────
 // PUT /api/attendance/manual  body: { employeeId, date, checkIn, checkOut, status, remarks }
 export const upsertManualAttendance = asyncHandler(async (req, res) => {
-  if (!['admin', 'hr'].includes(req.user.role)) {
+  if (!['head', 'hr'].includes(req.user.role)) {
     res.status(403);
-    throw new Error('Admin/HR access required');
+    throw new Error('Head/HR access required');
   }
   const { employeeId, date, checkIn, checkOut, status, remarks } = req.body;
   if (!employeeId || !date) {
@@ -218,9 +218,9 @@ export const upsertManualAttendance = asyncHandler(async (req, res) => {
 // ─── Daily roster (admin/hr) ─────────────────────────────
 // GET /api/attendance/daily?date=2026-05-27
 export const getDailyAttendance = asyncHandler(async (req, res) => {
-  if (!['admin', 'hr'].includes(req.user.role)) {
+  if (!['head', 'hr'].includes(req.user.role)) {
     res.status(403);
-    throw new Error('Admin/HR access required');
+    throw new Error('Head/HR access required');
   }
   const date = req.query.date ? startOfDayIST(new Date(req.query.date)) : startOfDayIST();
   const records = await Attendance.find({ date }).populate('employee', 'name employeeId department');

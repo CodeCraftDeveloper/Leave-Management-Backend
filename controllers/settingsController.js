@@ -9,9 +9,9 @@ export const getSettings = asyncHandler(async (req, res) => {
 
 // PATCH /api/settings  (admin only)
 export const updateSettings = asyncHandler(async (req, res) => {
-  if (req.user.role !== 'admin') {
+  if (req.user.role !== 'head') {
     res.status(403);
-    throw new Error('Admin access required');
+    throw new Error('Head access required');
   }
   const settings = await Settings.get();
   const allowed = ['workStartTime', 'workEndTime', 'weekOffDays', 'perDayMode', 'monthlyFreeLeaves', 'sundayMinHours', 'sundayPayMultiplier'];

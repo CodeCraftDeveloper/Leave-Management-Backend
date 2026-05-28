@@ -22,6 +22,8 @@ const knownEmails = {
   H602: 'dishantmishra11092000@gmail.com',
 };
 
+const departmentHeadIds = new Set(['H641']);
+
 const roster = [
   { employeeId: 'H1',    name: 'HARENDRA PRATAP SINGH',   department: 'Unit Head',              designation: 'Unit Head' },
   { employeeId: 'H694',  name: 'DILEEP SINGH CHANDEL',    department: 'Production',             designation: 'Production' },
@@ -88,63 +90,49 @@ const run = async () => {
     { name: 'Christmas Day', date: new Date(`${currentYear}-12-25`), description: 'Christmas celebration' },
   ]);
 
-  console.log('Seeding admins...');
-  const admins = [
+  console.log('Seeding heads...');
+  // Heads: top-of-org reviewers. They do not apply for leave themselves; they
+  // approve dept_head leaves, see the weekly digest, and manage dept_heads.
+  const heads = [
     {
-      employeeId: 'ADMIN001',
-      name: 'Admin User',
+      employeeId: 'HEAD001',
+      name: 'Head User',
       email: 'charan.f.sde@gmail.com',
       password: 'admin123',
       department: 'Management',
-      designation: 'HR Admin',
-    },
-    {
-      employeeId: 'ADMIN002',
-      name: 'Raghav Goel',
-      email: 'raghav.goel@premindustries.in',
-      password: TEMP_PASSWORD,
-      department: 'Management',
-      designation: 'Admin',
-    },
-    {
-      employeeId: 'ADMIN003',
-      name: 'Saurabh',
-      email: 'saurabh@premindustries.in',
-      password: TEMP_PASSWORD,
-      department: 'Management',
-      designation: 'Admin',
-    },
-    {
-      employeeId: 'ADMIN004',
-      name: 'Rajan Kumar',
-      email: 'rajan.kumar@premindustries.in',
-      password: TEMP_PASSWORD,
-      department: 'Management',
-      designation: 'Admin',
+      designation: 'Unit Head',
     },
   ];
-  for (const a of admins) {
-    await Employee.create({ ...a, role: 'admin' });
+  for (const h of heads) {
+    // Heads are seeded with verified emails — they are configured by us, not self-registered.
+    await Employee.create({ ...h, role: 'head', emailVerified: true });
   }
 
   console.log(`Seeding ${roster.length} employees with temp password "${TEMP_PASSWORD}"...`);
   for (const entry of roster) {
+    const isDepartmentHead = departmentHeadIds.has(entry.employeeId);
     const doc = {
       employeeId: entry.employeeId,
       name: titleCase(entry.name),
       password: TEMP_PASSWORD,
       department: entry.department,
       designation: entry.designation,
-      role: 'employee',
+      role: isDepartmentHead ? 'dept_head' : 'employee',
     };
     const email = knownEmails[entry.employeeId];
-    if (email) doc.email = email;
+    if (email) {
+      doc.email = email;
+      // Per upgrade plan: only employees who already have an email on file at
+      // seed time are grandfathered to verified. Everyone else must verify
+      // via OTP after setting their email through the portal.
+      doc.emailVerified = true;
+    }
     await Employee.create(doc);
   }
 
   console.log('\nSeed complete');
-  console.log(`Admin (primary) -> charan.f.sde@gmail.com / admin123`);
-  console.log(`Admins -> raghav.goel@ | saurabh@ | rajan.kumar@premindustries.in / ${TEMP_PASSWORD}`);
+  console.log(`Head (primary) -> charan.f.sde@gmail.com / admin123`);
+  console.log(`Department Head -> H641 / ${TEMP_PASSWORD} (Shikhar Tripathi, Digital Market)`);
   console.log(`Employees -> <CardNo> / ${TEMP_PASSWORD} (e.g. H1 / ${TEMP_PASSWORD})`);
   await mongoose.disconnect();
   process.exit(0);

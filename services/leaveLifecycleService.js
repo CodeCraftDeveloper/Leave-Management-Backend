@@ -1,5 +1,6 @@
 import Attendance from '../models/Attendance.js';
 import { eachDayInRange, startOfDayIST } from '../utils/dateHelpers.js';
+import { leaveTypeLabel } from '../utils/leaveTypes.js';
 
 // Approval no longer deducts a yearly leave ledger — the 2-free-per-month
 // rule is enforced at payroll generation time. We only stamp the days as
@@ -12,9 +13,10 @@ export const onLeaveApproved = async (leave, actorId) => {
     const existing = await Attendance.findOne({ employee: empId, date });
     if (existing && existing.checkIn) continue; // don't overwrite real presence
     const status = leave.isHalfDay ? 'HALF_DAY' : 'ON_LEAVE';
+    const remarks = `Approved ${leaveTypeLabel(leave.leaveType)}`;
     if (existing) {
       existing.status = status;
-      existing.remarks = `Approved ${leave.leaveType} leave`;
+      existing.remarks = remarks;
       existing.updatedBy = actorId;
       await existing.save();
     } else {
@@ -22,7 +24,7 @@ export const onLeaveApproved = async (leave, actorId) => {
         employee: empId,
         date,
         status,
-        remarks: `Approved ${leave.leaveType} leave`,
+        remarks,
         createdBy: actorId,
       });
     }

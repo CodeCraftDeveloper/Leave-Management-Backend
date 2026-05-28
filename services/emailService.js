@@ -1,17 +1,13 @@
 import nodemailer from 'nodemailer';
-import Employee from '../models/Employee.js';
 import {
   leaveAppliedEmployeeTemplate,
   leaveAppliedAdminTemplate,
   leaveStatusUpdateTemplate,
+  emailVerificationTemplate,
+  weeklyHeadDigestTemplate,
 } from '../templates/emailTemplates.js';
 
 let transporter;
-
-const REQUIRED_ADMIN_RECIPIENTS = [
-  'charan.f.sde@gmail.com',
-  'rajan.kumar@premindustries.in',
-];
 
 const extractDisplayName = (from = '') => {
   const match = String(from).match(/^"?([^"<]+?)"?\s*</);
@@ -62,18 +58,10 @@ const sendMail = async ({ to, subject, html }) => {
   }
 };
 
-const configuredAdminRecipients = () => [
-  ...new Set(
-    [
-      ...REQUIRED_ADMIN_RECIPIENTS,
-      ...(process.env.ADMIN_EMAIL || '').split(','),
-    ]
-      .map((email) => email.trim().toLowerCase())
-      .filter(Boolean)
-  ),
-];
-
-export const sendLeaveAppliedEmails = async ({ employee, leave }) => {
+// Department-wise routing: the applicant gets a confirmation, and the assigned
+// approver (resolved at apply time) gets the actionable mail. No more
+// hard-coded recipient list — every email is targeted.
+export const sendLeaveAppliedEmails = async ({ employee, leave, approver }) => {
   const tasks = [];
 
   if (employee.email) {
@@ -84,27 +72,14 @@ export const sendLeaveAppliedEmails = async ({ employee, leave }) => {
     }));
   }
 
-  let unique = configuredAdminRecipients();
-  if (!unique.length) {
-    const admins = await Employee.find({ role: 'admin', active: true })
-      .select('email')
-      .lean();
-    unique = [
-      ...new Set(
-        admins
-          .map((a) => a.email)
-          .filter(Boolean)
-          .map((e) => e.toLowerCase())
-      ),
-    ];
-  }
-
-  if (unique.length) {
+  if (approver?.email) {
     tasks.push(sendMail({
-      to: unique.join(','),
+      to: approver.email,
       subject: `New Leave Request - ${employee.name}`,
-      html: leaveAppliedAdminTemplate({ employee, leave }),
+      html: leaveAppliedAdminTemplate({ employee, leave, approver }),
     }));
+  } else {
+    console.warn(`[Email-warn] No approver email for leave ${leave._id} by ${employee.employeeId}`);
   }
 
   const results = await Promise.all(tasks);
@@ -128,4 +103,23 @@ export const sendLeaveStatusEmail = async ({ employee, leave }) => {
   });
 };
 
+export const sendVerificationCodeEmail = async ({ employee, code, expiresInMinutes }) => {
+  if (!employee.email) return { skipped: true };
+  return sendMail({
+    to: employee.email,
+    subject: 'Verify your email - Prem Industries Leave Portal',
+    html: emailVerificationTemplate({ employee, code, expiresInMinutes }),
+  });
+};
+
+export const sendWeeklyHeadDigestEmail = async ({ head, weekStart, weekEnd, leaves }) => {
+  if (!head.email) return { skipped: true };
+  return sendMail({
+    to: head.email,
+    subject: `Weekly Approved Leave Roster - ${weekStart.toLocaleDateString()} to ${weekEnd.toLocaleDateString()}`,
+    html: weeklyHeadDigestTemplate({ head, weekStart, weekEnd, leaves }),
+  });
+};
+
+export { sendMail };
 export default sendMail;

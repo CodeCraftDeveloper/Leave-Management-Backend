@@ -1,3 +1,5 @@
+import { leaveTypeLabel } from '../utils/leaveTypes.js';
+
 const baseStyles = `
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   color: #1f2937;
@@ -32,7 +34,7 @@ const wrap = (content) => `
 
 const detailsTable = (leave) => `
   <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-    <tr><td style="padding:8px;border-bottom:1px solid #e5e7eb;"><b>Leave Type</b></td><td style="padding:8px;border-bottom:1px solid #e5e7eb;text-transform:capitalize;">${leave.leaveType}</td></tr>
+    <tr><td style="padding:8px;border-bottom:1px solid #e5e7eb;"><b>Leave Type</b></td><td style="padding:8px;border-bottom:1px solid #e5e7eb;">${leaveTypeLabel(leave.leaveType)}</td></tr>
     <tr><td style="padding:8px;border-bottom:1px solid #e5e7eb;"><b>Start Date</b></td><td style="padding:8px;border-bottom:1px solid #e5e7eb;">${new Date(leave.startDate).toLocaleDateString()}</td></tr>
     <tr><td style="padding:8px;border-bottom:1px solid #e5e7eb;"><b>End Date</b></td><td style="padding:8px;border-bottom:1px solid #e5e7eb;">${new Date(leave.endDate).toLocaleDateString()}</td></tr>
     <tr><td style="padding:8px;border-bottom:1px solid #e5e7eb;"><b>Total Days</b></td><td style="padding:8px;border-bottom:1px solid #e5e7eb;">${leave.totalDays}</td></tr>
@@ -43,17 +45,27 @@ const detailsTable = (leave) => `
 export const leaveAppliedEmployeeTemplate = ({ employee, leave }) =>
   wrap(`
     <h2 style="margin-top:0;">Hi ${employee.name},</h2>
-    <p>Your leave application has been submitted successfully and is pending admin review.</p>
+    <p>Your leave application has been submitted successfully and is pending review.</p>
     ${detailsTable(leave)}
     <p>You will be notified once it is approved or rejected.</p>
   `);
 
-export const leaveAppliedAdminTemplate = ({ employee, leave }) =>
+export const leaveAppliedAdminTemplate = ({ employee, leave, approver }) =>
   wrap(`
-    <h2 style="margin-top:0;">New Leave Request</h2>
-    <p><b>${employee.name}</b> (${employee.employeeId} &middot; ${employee.department}) submitted a leave request.</p>
+    <h2 style="margin-top:0;">Hi ${approver?.name?.split(' ')[0] || 'there'},</h2>
+    <p><b>${employee.name}</b> (${employee.employeeId} &middot; ${employee.department}) submitted a leave request and is awaiting your review.</p>
     ${detailsTable(leave)}
-    <p>Please log in to the admin dashboard to take action.</p>
+    <p>Open the Leave Portal to approve or reject this request.</p>
+  `);
+
+export const emailVerificationTemplate = ({ employee, code, expiresInMinutes }) =>
+  wrap(`
+    <h2 style="margin-top:0;">Hi ${employee.name},</h2>
+    <p>Use the verification code below to confirm your email on the Prem Industries Leave Portal.</p>
+    <p style="text-align:center;margin:24px 0;">
+      <span style="display:inline-block;font-family:'SFMono-Regular',Consolas,Menlo,monospace;font-size:32px;letter-spacing:10px;font-weight:700;color:#4f46e5;background:#eef2ff;padding:14px 22px;border-radius:12px;border:1px solid #e0e7ff;">${code}</span>
+    </p>
+    <p style="font-size:14px;color:#6b7280;">This code expires in ${expiresInMinutes} minutes. If you did not request it, you can safely ignore this message.</p>
   `);
 
 export const leaveStatusUpdateTemplate = ({ employee, leave }) => {
@@ -62,6 +74,39 @@ export const leaveStatusUpdateTemplate = ({ employee, leave }) => {
     <h2 style="margin-top:0;">Hi ${employee.name},</h2>
     <p>Your leave request has been <span style="color:${color};font-weight:600;text-transform:uppercase;">${leave.status}</span>.</p>
     ${detailsTable(leave)}
-    ${leave.adminComment ? `<p><b>Admin Comment:</b> ${leave.adminComment}</p>` : ''}
+    ${leave.adminComment ? `<p><b>Reviewer Comment:</b> ${leave.adminComment}</p>` : ''}
+  `);
+};
+
+export const weeklyHeadDigestTemplate = ({ head, weekStart, weekEnd, leaves }) => {
+  const rows = leaves.length
+    ? leaves.map((leave) => `
+      <tr>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${leave.employee?.name || '-'}</td>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${leave.employee?.employeeId || '-'}</td>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${leave.employee?.department || '-'}</td>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${leaveTypeLabel(leave.leaveType)}</td>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${new Date(leave.startDate).toLocaleDateString()}</td>
+        <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${new Date(leave.endDate).toLocaleDateString()}</td>
+      </tr>
+    `).join('')
+    : '<tr><td colspan="6" style="padding:14px;text-align:center;color:#6b7280;">No approved leaves for this week.</td></tr>';
+
+  return wrap(`
+    <h2 style="margin-top:0;">Hi ${head.name},</h2>
+    <p>Approved leave roster for ${weekStart.toLocaleDateString()} to ${weekEnd.toLocaleDateString()}.</p>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
+      <thead>
+        <tr style="background:#f9fafb;">
+          <th align="left" style="padding:8px;border-bottom:1px solid #e5e7eb;">Name</th>
+          <th align="left" style="padding:8px;border-bottom:1px solid #e5e7eb;">ID</th>
+          <th align="left" style="padding:8px;border-bottom:1px solid #e5e7eb;">Department</th>
+          <th align="left" style="padding:8px;border-bottom:1px solid #e5e7eb;">Type</th>
+          <th align="left" style="padding:8px;border-bottom:1px solid #e5e7eb;">From</th>
+          <th align="left" style="padding:8px;border-bottom:1px solid #e5e7eb;">To</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
   `);
 };

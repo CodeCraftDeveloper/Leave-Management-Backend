@@ -1,10 +1,14 @@
 // Centralized enums and constants.
 
 export const ROLES = Object.freeze({
-  ADMIN: 'admin',
-  HR: 'hr',
   EMPLOYEE: 'employee',
+  DEPT_HEAD: 'dept_head',
+  HEAD: 'head',
+  HR: 'hr',
 });
+
+// Roles that can review/approve leave requests of others.
+export const REVIEWER_ROLES = Object.freeze(['dept_head', 'head']);
 
 export const EMPLOYEE_STATUS = Object.freeze({
   ACTIVE: 'ACTIVE',

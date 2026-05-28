@@ -1,7 +1,7 @@
 import asyncHandler from 'express-async-handler';
 import { getYearlyBalances } from '../services/leaveBalanceService.js';
 
-const adminOrHR = (user) => ['admin', 'hr'].includes(user.role);
+const adminOrHR = (user) => ['head', 'hr'].includes(user.role);
 
 // GET /api/leave-balances/:employeeId?year=2026   (admin/hr OR self)
 export const getBalances = asyncHandler(async (req, res) => {

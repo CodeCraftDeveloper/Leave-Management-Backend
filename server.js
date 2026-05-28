@@ -10,6 +10,7 @@ import authRoutes from './routes/authRoutes.js';
 import leaveRoutes from './routes/leaveRoutes.js';
 import employeeRoutes from './routes/employeeRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
+import manageRoutes from './routes/manageRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import holidayRoutes from './routes/holidayRoutes.js';
 import attendanceRoutes from './routes/attendanceRoutes.js';
@@ -20,6 +21,7 @@ import settingsRoutes from './routes/settingsRoutes.js';
 import leaveBalanceRoutes from './routes/leaveBalanceRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import { notFound, errorHandler } from './middleware/errorHandler.js';
+import { startWeeklyDigestScheduler } from './services/weeklyDigestService.js';
 
 dotenv.config();
 connectDB();
@@ -61,6 +63,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/leaves', leaveRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/manage', manageRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/holidays', holidayRoutes);
 app.use('/api/attendance', attendanceRoutes);
@@ -78,3 +81,4 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () =>
   console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`)
 );
+startWeeklyDigestScheduler();

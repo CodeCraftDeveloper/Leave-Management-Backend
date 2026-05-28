@@ -1,6 +1,14 @@
 import asyncHandler from 'express-async-handler';
+import crypto from 'crypto';
 import Employee from '../models/Employee.js';
 import generateToken from '../utils/generateToken.js';
+import { sendVerificationCodeEmail } from '../services/emailService.js';
+
+const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
+const OTP_TTL_MINUTES = 15;
+const OTP_MAX_ATTEMPTS = 5;
+
+const generateOtp = () => String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
 
 const sanitize = (u) => ({
   _id: u._id,
@@ -14,10 +22,12 @@ const sanitize = (u) => ({
   leaveBalance: u.leaveBalance,
   profileImage: u.profileImage,
   joiningDate: u.joiningDate,
+  emailVerified: !!u.emailVerified,
   needsEmailSetup: !u.email,
+  needsEmailVerification: !!u.email && !u.emailVerified,
 });
 
-// @desc Unified login (Admin and Employee)
+// @desc Unified login
 // @route POST /api/auth/login
 export const login = asyncHandler(async (req, res) => {
   const { username, employeeId, email, password } = req.body;
@@ -40,7 +50,7 @@ export const login = asyncHandler(async (req, res) => {
   res.json({ user: sanitize(user), token: generateToken(user._id, user.role) });
 });
 
-// @desc Register employee (admin only - but exposed for setup)
+// @desc Register employee
 // @route POST /api/auth/register
 export const registerEmployee = asyncHandler(async (req, res) => {
   const { employeeId, name, email, password, department, designation, phone, role } = req.body;
@@ -74,11 +84,27 @@ export const me = asyncHandler(async (req, res) => {
   res.json({ user: sanitize(req.user) });
 });
 
-// @desc Set/update email for the current user (used when account was seeded without one)
+// Issue and email a fresh OTP for the user's current email. Stores the code
+// on the user doc with a TTL so verification can be checked statelessly.
+const issueOtp = async (user) => {
+  const code = generateOtp();
+  user.emailVerifyCode = code;
+  user.emailVerifyExpires = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+  user.emailVerifyAttempts = 0;
+  await user.save();
+  await sendVerificationCodeEmail({
+    employee: user,
+    code,
+    expiresInMinutes: OTP_TTL_MINUTES,
+  });
+};
+
+// @desc Set/update email and send a verification OTP. Sets emailVerified=false
+// until the user submits the OTP back via POST /auth/email/verify.
 // @route PUT /api/auth/email
 export const setEmail = asyncHandler(async (req, res) => {
   const raw = (req.body?.email || '').trim().toLowerCase();
-  if (!raw || !/^\S+@\S+\.\S+$/.test(raw)) {
+  if (!raw || !EMAIL_PATTERN.test(raw)) {
     res.status(400);
     throw new Error('A valid email is required');
   }
@@ -87,7 +113,83 @@ export const setEmail = asyncHandler(async (req, res) => {
     res.status(409);
     throw new Error('This email is already in use');
   }
-  req.user.email = raw;
-  await req.user.save();
-  res.json({ user: sanitize(req.user) });
+
+  // Load the user with hidden OTP fields so we can stamp them in one save.
+  const user = await Employee.findById(req.user._id).select(
+    '+emailVerifyCode +emailVerifyExpires +emailVerifyAttempts'
+  );
+  user.email = raw;
+  user.emailVerified = false;
+  await issueOtp(user);
+
+  res.json({
+    user: sanitize(user),
+    message: `Verification code sent to ${raw}. Enter it within ${OTP_TTL_MINUTES} minutes.`,
+  });
+});
+
+// @desc Resend the OTP for the email currently on file.
+// @route POST /api/auth/email/resend
+export const resendVerification = asyncHandler(async (req, res) => {
+  if (!req.user.email) {
+    res.status(400);
+    throw new Error('No email on file. Set an email first.');
+  }
+  if (req.user.emailVerified) {
+    res.json({ message: 'Email already verified' });
+    return;
+  }
+  const user = await Employee.findById(req.user._id).select(
+    '+emailVerifyCode +emailVerifyExpires +emailVerifyAttempts'
+  );
+  await issueOtp(user);
+  res.json({
+    message: `Verification code re-sent to ${user.email}. Expires in ${OTP_TTL_MINUTES} minutes.`,
+  });
+});
+
+// @desc Verify the email using the 6-digit OTP.
+// @route POST /api/auth/email/verify
+export const verifyEmail = asyncHandler(async (req, res) => {
+  const code = String(req.body?.code || '').trim();
+  if (!/^\d{6}$/.test(code)) {
+    res.status(400);
+    throw new Error('Enter the 6-digit code from your email');
+  }
+  const user = await Employee.findById(req.user._id).select(
+    '+emailVerifyCode +emailVerifyExpires +emailVerifyAttempts'
+  );
+  if (!user.email) {
+    res.status(400);
+    throw new Error('No email on file');
+  }
+  if (user.emailVerified) {
+    res.json({ user: sanitize(user), message: 'Email already verified' });
+    return;
+  }
+  if (!user.emailVerifyCode || !user.emailVerifyExpires) {
+    res.status(400);
+    throw new Error('No verification request found. Request a new code.');
+  }
+  if (user.emailVerifyExpires < new Date()) {
+    res.status(400);
+    throw new Error('Code expired. Request a new one.');
+  }
+  if (user.emailVerifyAttempts >= OTP_MAX_ATTEMPTS) {
+    res.status(429);
+    throw new Error('Too many incorrect attempts. Request a new code.');
+  }
+  if (user.emailVerifyCode !== code) {
+    user.emailVerifyAttempts += 1;
+    await user.save();
+    res.status(400);
+    throw new Error('Incorrect code');
+  }
+
+  user.emailVerified = true;
+  user.emailVerifyCode = undefined;
+  user.emailVerifyExpires = undefined;
+  user.emailVerifyAttempts = 0;
+  await user.save();
+  res.json({ user: sanitize(user), message: 'Email verified' });
 });

@@ -5,10 +5,29 @@ import Holiday from '../models/Holiday.js';
 import { calculateDays, datesOverlap } from '../utils/calculateDays.js';
 import { sendLeaveAppliedEmails, sendLeaveStatusEmail } from '../services/emailService.js';
 import { onApprovedLeaveCancelled } from '../services/leaveLifecycleService.js';
+import { resolveApprover } from '../utils/approverResolver.js';
+import { isBeforeTodayIST } from '../utils/dateHelpers.js';
+import { leaveTypeLabel } from '../utils/leaveTypes.js';
 
 // @desc Apply leave
 // @route POST /api/leaves
 export const applyLeave = asyncHandler(async (req, res) => {
+  // Heads do not apply leave through this flow; they only review.
+  if (req.user.role === 'head') {
+    res.status(403);
+    throw new Error('Heads do not submit leave requests through this portal');
+  }
+  // Email verification gate — applying requires a verified email so the
+  // approval/rejection updates reach the applicant.
+  if (!req.user.email) {
+    res.status(403);
+    throw new Error('Add your email before applying for leave');
+  }
+  if (!req.user.emailVerified) {
+    res.status(403);
+    throw new Error('Verify your email before applying for leave');
+  }
+
   const { leaveType, startDate, endDate, reason, isHalfDay, halfDaySession } = req.body;
   if (!leaveType || !startDate || !endDate || !reason) {
     res.status(400);
@@ -21,6 +40,10 @@ export const applyLeave = asyncHandler(async (req, res) => {
   if (isNaN(start) || isNaN(end)) {
     res.status(400);
     throw new Error('Invalid dates');
+  }
+  if (isBeforeTodayIST(start)) {
+    res.status(400);
+    throw new Error('Cannot apply leave for a past date');
   }
   if (end < start) {
     res.status(400);
@@ -90,8 +113,23 @@ export const applyLeave = asyncHandler(async (req, res) => {
 
   const attachment = req.file ? `/uploads/${req.file.filename}` : '';
 
+  // Resolve the approver based on the applicant's role + department so the
+  // request lands in exactly the right inbox. We surface a clear error rather
+  // than silently failing — operations needs to know they're missing a head
+  // or a dept_head for that department.
+  const approver = await resolveApprover(req.user);
+  if (!approver) {
+    res.status(503);
+    throw new Error(
+      req.user.role === 'employee'
+        ? `No department head assigned for ${req.user.department}. Contact a head to set one.`
+        : 'No head is configured to approve dept_head leaves yet.'
+    );
+  }
+
   const leave = await Leave.create({
     employee: req.user._id,
+    approver: approver._id,
     leaveType,
     startDate: start,
     endDate: end,
@@ -105,11 +143,17 @@ export const applyLeave = asyncHandler(async (req, res) => {
   await Notification.create({
     recipient: req.user._id,
     title: 'Leave Submitted',
-    message: `Your ${leaveType} leave request for ${totalDays} day(s) is pending review.`,
+    message: `Your ${leaveTypeLabel(leaveType)} request for ${totalDays} day(s) is pending review.`,
+    type: 'info',
+  });
+  await Notification.create({
+    recipient: approver._id,
+    title: 'New Leave Request',
+    message: `${req.user.name} (${req.user.employeeId}) requested ${totalDays} day(s) of ${leaveTypeLabel(leaveType)}.`,
     type: 'info',
   });
 
-  await sendLeaveAppliedEmails({ employee: req.user, leave });
+  await sendLeaveAppliedEmails({ employee: req.user, leave, approver });
 
   res.status(201).json(leave);
 });
@@ -138,7 +182,13 @@ export const getLeaveById = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Leave not found');
   }
-  if (req.user.role !== 'admin' && leave.employee._id.toString() !== req.user._id.toString()) {
+  // Visibility: heads see everything; dept_heads see anything in their dept
+  // (including their own); employees see only their own.
+  const isOwner = leave.employee._id.toString() === req.user._id.toString();
+  const isHead = req.user.role === 'head';
+  const isDeptHeadOfApplicant =
+    req.user.role === 'dept_head' && leave.employee.department === req.user.department;
+  if (!isOwner && !isHead && !isDeptHeadOfApplicant) {
     res.status(403);
     throw new Error('Not authorized');
   }
@@ -209,7 +259,17 @@ export const getMySummary = asyncHandler(async (req, res) => {
 export const getCalendarLeaves = asyncHandler(async (req, res) => {
   const { from, to, all } = req.query;
   const filter = { status: 'approved' };
-  if (req.user.role !== 'admin' || !all) filter.employee = req.user._id;
+  // Scope: head with ?all=1 sees everyone; dept_head with ?all=1 sees their
+  // department; everyone else sees only their own.
+  if (all && req.user.role === 'head') {
+    // no employee filter
+  } else if (all && req.user.role === 'dept_head') {
+    const Employee = (await import('../models/Employee.js')).default;
+    const dept = await Employee.find({ department: req.user.department, active: true }).select('_id');
+    filter.employee = { $in: dept.map((d) => d._id) };
+  } else {
+    filter.employee = req.user._id;
+  }
   if (from && to) {
     filter.startDate = { $lte: new Date(to) };
     filter.endDate = { $gte: new Date(from) };

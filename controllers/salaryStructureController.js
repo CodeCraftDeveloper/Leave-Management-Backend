@@ -2,7 +2,7 @@ import asyncHandler from 'express-async-handler';
 import SalaryStructure from '../models/SalaryStructure.js';
 import Employee from '../models/Employee.js';
 
-const adminOrHR = (user) => ['admin', 'hr'].includes(user.role);
+const adminOrHR = (user) => ['head', 'hr'].includes(user.role);
 
 // GET /api/salary-structures/:employeeId   (admin/hr OR self)
 export const getStructure = asyncHandler(async (req, res) => {
@@ -19,7 +19,7 @@ export const getStructure = asyncHandler(async (req, res) => {
 export const upsertStructure = asyncHandler(async (req, res) => {
   if (!adminOrHR(req.user)) {
     res.status(403);
-    throw new Error('Admin/HR access required');
+    throw new Error('Head/HR access required');
   }
   const employee = await Employee.findById(req.params.employeeId);
   if (!employee) {

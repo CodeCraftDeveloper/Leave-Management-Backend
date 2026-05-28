@@ -1,12 +1,15 @@
 import asyncHandler from 'express-async-handler';
+import ExcelJS from 'exceljs';
 import Leave from '../models/Leave.js';
 import Employee from '../models/Employee.js';
 import Notification from '../models/Notification.js';
 import Holiday from '../models/Holiday.js';
 import { calculateDays, datesOverlap } from '../utils/calculateDays.js';
 import { assessDepartmentStaffing } from '../utils/staffingCoverage.js';
+import { isBeforeTodayIST } from '../utils/dateHelpers.js';
 import { sendLeaveStatusEmail } from '../services/emailService.js';
 import { onLeaveApproved } from '../services/leaveLifecycleService.js';
+import { leaveTypeLabel } from '../utils/leaveTypes.js';
 
 const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
 
@@ -20,8 +23,8 @@ const normalizeEmployeeInput = (payload, { requirePassword = false } = {}) => {
   const password = typeof payload.password === 'string' ? payload.password : '';
   const joiningDate = payload.joiningDate ? new Date(payload.joiningDate) : undefined;
 
-  if (!employeeId || !name || !department || !designation) {
-    throw new Error('Employee ID, name, department and designation are required');
+  if (!employeeId || !name || !email || !department || !designation) {
+    throw new Error('Employee ID, name, email, department and designation are required');
   }
   if (email && !EMAIL_PATTERN.test(email)) {
     throw new Error('A valid email is required');
@@ -81,7 +84,7 @@ const rejectStaffingLimit = (res, staffingCoverage) => res.status(409).json({
 // @route GET /api/admin/dashboard
 export const getDashboard = asyncHandler(async (req, res) => {
   const [totalEmployees, pending, approved, rejected] = await Promise.all([
-    Employee.countDocuments({ role: 'employee', active: true }),
+    Employee.countDocuments({ role: { $in: ['employee', 'dept_head'] }, active: true }),
     Leave.countDocuments({ status: 'pending' }),
     Leave.countDocuments({ status: 'approved' }),
     Leave.countDocuments({ status: 'rejected' }),
@@ -160,6 +163,110 @@ export const getAllLeaves = asyncHandler(async (req, res) => {
   res.json({ items, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
 });
 
+// @desc Export employee leaves to Excel
+// @route GET /api/admin/leaves/export
+export const exportLeaves = asyncHandler(async (req, res) => {
+  const { status, type, search, startDate, endDate } = req.query;
+  const filter = {};
+  if (status && status !== 'all') filter.status = status;
+  if (type && type !== 'all') filter.leaveType = type;
+  if (startDate || endDate) {
+    filter.startDate = {};
+    if (startDate) filter.startDate.$gte = new Date(startDate);
+    if (endDate) filter.startDate.$lte = new Date(endDate);
+  }
+
+  if (search) {
+    const employees = await Employee.find({
+      $or: [
+        { name: { $regex: search, $options: 'i' } },
+        { employeeId: { $regex: search, $options: 'i' } },
+        { department: { $regex: search, $options: 'i' } },
+      ],
+    }).select('_id');
+    filter.employee = { $in: employees.map((e) => e._id) };
+  }
+
+  const leaves = await Leave.find(filter)
+    .sort({ createdAt: -1 })
+    .populate('employee', 'name employeeId department designation email')
+    .populate('actionedBy', 'name employeeId');
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Leave Management System';
+  workbook.created = new Date();
+  const sheet = workbook.addWorksheet('Employee Leaves');
+
+  sheet.columns = [
+    { header: 'Employee ID', key: 'employeeId', width: 14 },
+    { header: 'Employee Name', key: 'name', width: 24 },
+    { header: 'Department', key: 'department', width: 18 },
+    { header: 'Designation', key: 'designation', width: 18 },
+    { header: 'Email', key: 'email', width: 28 },
+    { header: 'Leave Type', key: 'leaveType', width: 14 },
+    { header: 'Start Date', key: 'startDate', width: 14 },
+    { header: 'End Date', key: 'endDate', width: 14 },
+    { header: 'Total Days', key: 'totalDays', width: 11 },
+    { header: 'Half Day', key: 'halfDay', width: 12 },
+    { header: 'Status', key: 'status', width: 12 },
+    { header: 'Reason', key: 'reason', width: 32 },
+    { header: 'Reviewer Comment', key: 'adminComment', width: 32 },
+    { header: 'Actioned By', key: 'actionedBy', width: 22 },
+    { header: 'Actioned At', key: 'actionedAt', width: 18 },
+    { header: 'Applied At', key: 'createdAt', width: 18 },
+  ];
+
+  sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  sheet.getRow(1).fill = {
+    type: 'pattern',
+    pattern: 'solid',
+    fgColor: { argb: 'FF1F2937' },
+  };
+  sheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+  sheet.getRow(1).height = 22;
+
+  const fmt = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
+  const fmtDT = (d) => (d ? new Date(d).toISOString().replace('T', ' ').slice(0, 16) : '');
+
+  leaves.forEach((l) => {
+    sheet.addRow({
+      employeeId: l.employee?.employeeId || '',
+      name: l.employee?.name || '',
+      department: l.employee?.department || '',
+      designation: l.employee?.designation || '',
+      email: l.employee?.email || '',
+      leaveType: l.leaveType,
+      startDate: fmt(l.startDate),
+      endDate: fmt(l.endDate),
+      totalDays: l.totalDays,
+      halfDay: l.isHalfDay ? l.halfDaySession || 'yes' : '',
+      status: l.status,
+      reason: l.reason || '',
+      adminComment: l.adminComment || '',
+      actionedBy: l.actionedBy ? `${l.actionedBy.name} (${l.actionedBy.employeeId})` : '',
+      actionedAt: fmtDT(l.actionedAt),
+      createdAt: fmtDT(l.createdAt),
+    });
+  });
+
+  sheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: sheet.columns.length },
+  };
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  );
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="employee-leaves-${stamp}.xlsx"`
+  );
+  await workbook.xlsx.write(res);
+  res.end();
+});
+
 // @desc Approve/Reject leave
 // @route PATCH /api/admin/leaves/:id
 export const updateLeaveStatus = asyncHandler(async (req, res) => {
@@ -220,7 +327,7 @@ export const updateLeaveStatus = asyncHandler(async (req, res) => {
   await Notification.create({
     recipient: leave.employee._id,
     title: `Leave ${status}`,
-    message: `Your ${leave.leaveType} leave has been ${status}.${adminComment ? ' Note: ' + adminComment : ''}`,
+    message: `Your ${leaveTypeLabel(leave.leaveType)} has been ${status}.${adminComment ? ' Note: ' + adminComment : ''}`,
     type: status === 'approved' ? 'success' : 'error',
   });
 
@@ -233,7 +340,7 @@ export const updateLeaveStatus = asyncHandler(async (req, res) => {
 // @route GET /api/admin/employees
 export const getEmployees = asyncHandler(async (req, res) => {
   const { search, department, page = 1, limit = 20 } = req.query;
-  const filter = { role: 'employee', active: true };
+  const filter = { role: { $in: ['employee', 'dept_head'] }, active: true };
   if (department) filter.department = department;
   if (search) {
     filter.$or = [
@@ -284,7 +391,11 @@ export const createEmployee = asyncHandler(async (req, res) => {
 // @desc Employee detail with leaves
 // @route GET /api/admin/employees/:id
 export const getEmployeeDetail = asyncHandler(async (req, res) => {
-  const employee = await Employee.findOne({ _id: req.params.id, role: 'employee', active: true });
+  const employee = await Employee.findOne({
+    _id: req.params.id,
+    role: { $in: ['employee', 'dept_head'] },
+    active: true,
+  });
   if (!employee) {
     res.status(404);
     throw new Error('Employee not found');
@@ -309,7 +420,11 @@ export const updateEmployee = asyncHandler(async (req, res) => {
     throw error;
   }
 
-  const employee = await Employee.findOne({ _id: req.params.id, role: 'employee', active: true });
+  const employee = await Employee.findOne({
+    _id: req.params.id,
+    role: { $in: ['employee', 'dept_head'] },
+    active: true,
+  });
   if (!employee) {
     res.status(404);
     throw new Error('Employee not found');
@@ -324,7 +439,13 @@ export const updateEmployee = asyncHandler(async (req, res) => {
 
   employee.employeeId = input.employeeId;
   employee.name = input.name;
-  employee.email = input.email;
+  if (employee.email !== input.email) {
+    employee.email = input.email;
+    employee.emailVerified = false;
+    employee.emailVerifyCode = undefined;
+    employee.emailVerifyExpires = undefined;
+    employee.emailVerifyAttempts = 0;
+  }
   employee.phone = input.phone;
   employee.department = input.department;
   employee.designation = input.designation;
@@ -341,7 +462,11 @@ export const updateEmployee = asyncHandler(async (req, res) => {
 // @desc Deactivate employee while preserving leave history
 // @route DELETE /api/admin/employees/:id
 export const deleteEmployee = asyncHandler(async (req, res) => {
-  const employee = await Employee.findOne({ _id: req.params.id, role: 'employee', active: true });
+  const employee = await Employee.findOne({
+    _id: req.params.id,
+    role: { $in: ['employee', 'dept_head'] },
+    active: true,
+  });
   if (!employee) {
     res.status(404);
     throw new Error('Employee not found');
@@ -365,7 +490,11 @@ export const updateEmployeeWorkDetails = asyncHandler(async (req, res) => {
     throw new Error('Department and designation are required');
   }
 
-  const employee = await Employee.findOne({ _id: req.params.id, role: 'employee', active: true });
+  const employee = await Employee.findOne({
+    _id: req.params.id,
+    role: { $in: ['employee', 'dept_head'] },
+    active: true,
+  });
   if (!employee) {
     res.status(404);
     throw new Error('Employee not found');
@@ -401,6 +530,10 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
   if (isNaN(start) || isNaN(end)) {
     res.status(400);
     throw new Error('Invalid dates');
+  }
+  if (isBeforeTodayIST(start)) {
+    res.status(400);
+    throw new Error('Cannot apply leave for a past date');
   }
   if (end < start) {
     res.status(400);
@@ -494,7 +627,7 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
     status: 'approved',
     actionedBy: req.user._id,
     actionedAt: new Date(),
-    adminComment: 'Applied by Admin on behalf of Employee',
+    adminComment: 'Applied by Head on behalf of Employee',
     staffingOverride: staffingCoverage.blocked && staffingOverride.requested,
     staffingOverrideReason: staffingCoverage.blocked && staffingOverride.requested ? staffingOverride.reason : '',
     staffingSnapshot: staffingCoverage,
@@ -514,7 +647,7 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
   await Notification.create({
     recipient: employee._id,
     title: 'Leave Approved',
-    message: `A ${leaveType} leave request of ${totalDays} day(s) has been logged and approved on your behalf by Admin.`,
+    message: `A ${leaveTypeLabel(leaveType)} request of ${totalDays} day(s) has been logged and approved on your behalf by Head.`,
     type: 'success',
   });
 

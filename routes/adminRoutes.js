@@ -2,6 +2,7 @@ import express from 'express';
 import {
   getDashboard,
   getAllLeaves,
+  exportLeaves,
   updateLeaveStatus,
   getEmployees,
   createEmployee,
@@ -18,6 +19,7 @@ const router = express.Router();
 router.use(protect, adminOnly);
 
 router.get('/dashboard', getDashboard);
+router.get('/leaves/export', exportLeaves);
 router.get('/leaves', getAllLeaves);
 router.post('/leaves', applyLeaveOnBehalf);
 router.patch('/leaves/:id', updateLeaveStatus);

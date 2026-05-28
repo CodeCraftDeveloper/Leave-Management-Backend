@@ -22,8 +22,16 @@ const employeeSchema = new mongoose.Schema(
     address: { type: String, trim: true, default: '' },
     department: { type: String, default: 'General' },
     designation: { type: String, default: 'Employee' },
-    // 'employee' | 'admin' | 'hr' — HR added for the management panel layer.
-    role: { type: String, enum: ['employee', 'admin', 'hr'], default: 'employee' },
+    // 'employee'  -> applies leave; sees only own data
+    // 'dept_head' -> applies leave (approved by a head); approves leaves of their department
+    // 'head'      -> approves dept_head leaves; full org visibility; manages dept_heads
+    // 'hr'        -> kept for payroll/salary-structure helpers (legacy)
+    role: { type: String, enum: ['employee', 'dept_head', 'head', 'hr'], default: 'employee' },
+    // Verified via a 6-digit OTP sent to the email address. Required to apply leave.
+    emailVerified: { type: Boolean, default: false },
+    emailVerifyCode: { type: String, select: false },
+    emailVerifyExpires: { type: Date, select: false },
+    emailVerifyAttempts: { type: Number, default: 0, select: false },
     // Monthly CTC reference figure used by payroll. Detailed components
     // live in SalaryStructure; this is the single source of truth for
     // per-day salary calculation: perDay = monthlySalary / daysInMonth.

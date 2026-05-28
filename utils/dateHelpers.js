@@ -9,6 +9,8 @@ export const startOfDayIST = (input = new Date()) => {
   return new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()));
 };
 
+export const isBeforeTodayIST = (input) => startOfDayIST(input) < startOfDayIST();
+
 export const daysInMonth = (year, month) => new Date(year, month, 0).getDate();
 
 export const monthRange = (year, month) => {

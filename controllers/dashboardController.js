@@ -52,9 +52,9 @@ export const employeeDashboard = asyncHandler(async (req, res) => {
 
 // GET /api/dashboard/admin  (admin/hr)
 export const adminDashboard = asyncHandler(async (req, res) => {
-  if (!['admin', 'hr'].includes(req.user.role)) {
+  if (!['head', 'hr'].includes(req.user.role)) {
     res.status(403);
-    throw new Error('Admin/HR access required');
+    throw new Error('Head/HR access required');
   }
   const today = startOfDayIST();
   const now = new Date();

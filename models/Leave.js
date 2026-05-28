@@ -3,9 +3,15 @@ import mongoose from 'mongoose';
 const leaveSchema = new mongoose.Schema(
   {
     employee: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true, index: true },
+    // Resolved at apply-time based on applicant's role + department:
+    //   employee  -> dept_head of same department
+    //   dept_head -> a head (any)
+    // Heads do not apply leaves. Field is informational and used to scope review queues.
+    approver: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', index: true },
     leaveType: {
       type: String,
-      enum: ['casual', 'sick', 'emergency', 'paid', 'unpaid'],
+      enum: ['leave', 'casual', 'sick', 'emergency', 'paid', 'unpaid'],
+      default: 'leave',
       required: true,
     },
     startDate: { type: Date, required: true },
