@@ -26,6 +26,8 @@ const mailFrom = () => {
   return `"${displayName}" <${smtpUser}>`;
 };
 
+const notificationAddress = (person) => person?.notificationEmail || person?.email || '';
+
 const getTransporter = () => {
   if (transporter) return transporter;
   transporter = nodemailer.createTransport({
@@ -122,17 +124,20 @@ export const sendVerificationCodeEmail = async ({ employee, code, expiresInMinut
   });
 };
 
-// Notify every head when a dept_head approves an employee's leave. Heads get
-// an actionable mail because they retain the ability to overturn the approval
-// (before the leave start date) per the two-tier approval rule.
+// Notify the employee's mapped Head group when a dept_head approves leave.
+// Heads get actionable mail because they retain the ability to overturn the
+// approval before the leave start date.
 export const sendLeaveApprovedHeadNotice = async ({ heads, employee, leave, approvedBy }) => {
   const tasks = heads
-    .filter((head) => head?.email)
-    .map((head) => sendMail({
-      to: head.email,
-      subject: `Leave Approved by Dept Head - ${employee.name}`,
-      html: leaveApprovedHeadNoticeTemplate({ head, employee, leave, approvedBy }),
-    }));
+    .map((head) => ({ head, to: notificationAddress(head) }))
+    .filter(({ to }) => to)
+    .map(({ head, to }) =>
+      sendMail({
+        to,
+        subject: `Leave Approved by Dept Head - ${employee.name}`,
+        html: leaveApprovedHeadNoticeTemplate({ head, employee, leave, approvedBy }),
+      })
+    );
   if (!tasks.length) {
     console.warn(`[Email-warn] No head email to notify for leave ${leave._id} by ${employee.employeeId}`);
     return [];
@@ -175,9 +180,10 @@ export const sendLeaveReversedEmail = async ({ employee, originalApprover, leave
 };
 
 export const sendWeeklyHeadDigestEmail = async ({ head, weekStart, weekEnd, leaves }) => {
-  if (!head.email) return { skipped: true };
+  const to = notificationAddress(head);
+  if (!to) return { skipped: true };
   return sendMail({
-    to: head.email,
+    to,
     subject: `Weekly Approved Leave Roster - ${weekStart.toLocaleDateString()} to ${weekEnd.toLocaleDateString()}`,
     html: weeklyHeadDigestTemplate({ head, weekStart, weekEnd, leaves }),
   });

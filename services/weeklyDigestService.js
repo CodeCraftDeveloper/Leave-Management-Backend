@@ -33,8 +33,15 @@ export const getApprovedLeavesForWeek = async (referenceDate = new Date()) => {
 export const sendWeeklyHeadDigest = async (referenceDate = new Date()) => {
   const [{ weekStart, weekEnd, leaves }, heads] = await Promise.all([
     getApprovedLeavesForWeek(referenceDate),
-    Employee.find({ role: 'head', active: true, email: { $exists: true, $ne: '' } })
-      .select('name employeeId email')
+    Employee.find({
+      role: 'head',
+      active: true,
+      $or: [
+        { email: { $exists: true, $ne: '' } },
+        { notificationEmail: { $exists: true, $ne: '' } },
+      ],
+    })
+      .select('name employeeId email notificationEmail')
       .lean(),
   ]);
 

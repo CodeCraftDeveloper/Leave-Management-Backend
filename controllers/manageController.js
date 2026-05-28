@@ -13,6 +13,12 @@ import { onLeaveApproved, onApprovedLeaveCancelled } from '../services/leaveLife
 import { getApprovedLeavesForWeek, sendWeeklyHeadDigest } from '../services/weeklyDigestService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
 
+const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+
+const headRoutingEmailsForLeave = (leave) => [
+  ...new Set((leave.employee?.headNotificationEmails || []).map(normalizeEmail).filter(Boolean)),
+];
+
 // Build the Mongo filter for leave rows that `req.user` is allowed to review.
 // dept_head: leaves where they are the assigned approver. We also include
 // fallback by department in case an old leave has no approver stamped.
@@ -367,11 +373,18 @@ export const actionLeave = asyncHandler(async (req, res) => {
     });
     await sendLeaveStatusEmail({ employee: leave.employee, leave });
 
-    // When a dept_head approves an employee's leave, loop in every head so
-    // they can overturn it if needed. Skip when a head is the one approving
-    // (they already know) or when rejecting (no override path on rejection).
+    // When a dept_head approves an employee's leave, notify only the employee's
+    // mapped Head group from the roster/workbook. Skip when a head is the one
+    // approving (they already know) or when rejecting.
     if (status === 'approved' && req.user.role === 'dept_head') {
-      const heads = await Employee.find({ role: 'head', active: true }).select('name email _id');
+      const headEmails = headRoutingEmailsForLeave(leave);
+      const heads = await Employee.find({
+        role: 'head',
+        active: true,
+        ...(headEmails.length
+          ? { $or: [{ email: { $in: headEmails } }, { notificationEmail: { $in: headEmails } }] }
+          : {}),
+      }).select('name email notificationEmail _id');
       if (heads.length) {
         await Promise.all(heads.map((head) => Notification.create({
           recipient: head._id,

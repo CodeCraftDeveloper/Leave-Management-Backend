@@ -43,6 +43,18 @@ const DEFAULT_HEAD_EMAILS = [
   'dileep.singh@premindustries.in',
 ];
 
+const HEAD_EMAILS = Object.freeze({
+  primary: 'charan.f.sde@gmail.com',
+  rajan: 'rajan.kumar@premindustries.in',
+  hp: 'hp.singh@premindustries.in',
+  saurabh: 'saurabh@premindustries.in',
+  raghav: 'raghav.goel@premindustries.in',
+  satendra: 'satendra.katiyar@premindustries.in',
+  sp: 'sp.singh@premindustries.in',
+  production: 'production.premindustries@gmail.com',
+  dileep: 'dileep.singh@premindustries.in',
+});
+
 const departmentHeadIds = new Set(['H641', 'H697', 'H59', 'H633']);
 
 const rosterFromText = (text) =>
@@ -50,8 +62,14 @@ const rosterFromText = (text) =>
     .trim()
     .split('\n')
     .map((line) => {
-      const [employeeId, name, department, designation] = line.split('|').map((part) => part.trim());
-      return { employeeId, name, department, designation: designation || department };
+      const [employeeId, name, department, designation, headEmails] = line.split('|').map((part) => part.trim());
+      return {
+        employeeId,
+        name,
+        department,
+        designation: designation || department,
+        headEmailsRaw: headEmails || '',
+      };
     });
 
 const fallbackRoster = rosterFromText(`
@@ -315,6 +333,48 @@ const displayNameFromEmail = (email) => {
 
 const isPrimaryHeadEmail = (email) => email === 'charan.f.sde@gmail.com';
 
+const inferredHeadEmailsForDepartment = (department = '') => {
+  const dept = normalizeCell(department).toLowerCase();
+
+  if (!dept) return [HEAD_EMAILS.rajan];
+  if (dept.includes('digital market')) return [HEAD_EMAILS.rajan, HEAD_EMAILS.raghav];
+  if (
+    dept.includes('hr') ||
+    dept.includes('admin') ||
+    dept.includes('account') ||
+    dept.includes('e-com') ||
+    dept.includes('pre press')
+  ) {
+    return [HEAD_EMAILS.rajan, HEAD_EMAILS.saurabh];
+  }
+  if (dept === 'maintenance') return [HEAD_EMAILS.rajan, HEAD_EMAILS.hp];
+  if (dept.includes('maintenance')) return [HEAD_EMAILS.sp];
+  if (dept.includes('ppc')) return [HEAD_EMAILS.satendra];
+  if (
+    dept.includes('printing') ||
+    dept.includes('extrusion') ||
+    dept.includes('inspection') ||
+    dept.includes('lamination') ||
+    dept.includes('slitting')
+  ) {
+    return [HEAD_EMAILS.production, HEAD_EMAILS.satendra];
+  }
+  if (dept.includes('quality') || dept.includes('blown film')) return [HEAD_EMAILS.dileep];
+  if (dept.includes('pouch')) return [HEAD_EMAILS.sp];
+  if (dept.includes('production')) return [HEAD_EMAILS.rajan, HEAD_EMAILS.hp];
+
+  return [HEAD_EMAILS.rajan];
+};
+
+const headEmailsForEntry = (entry) => {
+  const explicit = [
+    ...(Array.isArray(entry.headEmails) ? entry.headEmails : []),
+    ...extractEmails(entry.headEmailsRaw),
+  ];
+  const source = explicit.length ? explicit : inferredHeadEmailsForDepartment(entry.department);
+  return [...new Set(source.map(normalizeEmail).filter(Boolean))];
+};
+
 const readWorkbookRoster = async () => {
   if (!fs.existsSync(EMPLOYEE_WORKBOOK)) return [];
 
@@ -405,7 +465,7 @@ const buildHeadSeeds = (roster) => {
   const headEmails = new Set(DEFAULT_HEAD_EMAILS.map(normalizeEmail).filter(Boolean));
 
   for (const entry of roster) {
-    for (const email of entry.headEmails || []) {
+    for (const email of headEmailsForEntry(entry)) {
       headEmails.add(email);
     }
   }
@@ -415,6 +475,7 @@ const buildHeadSeeds = (roster) => {
     name: isPrimaryHeadEmail(email) ? 'Head User' : displayNameFromEmail(email),
     sourceEmail: email,
     email: isPrimaryHeadEmail(email) ? email : undefined,
+    notificationEmail: email,
     password: isPrimaryHeadEmail(email) ? 'admin123' : TEMP_PASSWORD,
     department: 'Management',
     designation: 'Head',
@@ -485,6 +546,7 @@ const run = async () => {
       department: entry.department,
       designation: entry.designation,
       role: validRoles.has(explicitRole) ? explicitRole : isDepartmentHead ? 'dept_head' : 'employee',
+      headNotificationEmails: headEmailsForEntry(entry),
     };
 
     for (const optionalField of ['phone', 'address', 'joiningDate', 'monthlySalary', 'status']) {

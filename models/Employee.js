@@ -38,6 +38,19 @@ const employeeSchema = new mongoose.Schema(
     monthlySalary: { type: Number, default: 0, min: 0 },
     leaveBalance: { type: Object, default: defaultBalance },
     profileImage: { type: String, default: '' },
+    // Non-login email used for seeded Head notification accounts. This avoids
+    // reserving Employee.email, so the real employee can still self-register
+    // and verify that address on their own profile.
+    notificationEmail: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      default: '',
+    },
+    // Head notification routing copied from the employee workbook email column.
+    // These are not login emails for the employee; they identify which Head
+    // accounts should be notified when this employee's leave is approved.
+    headNotificationEmails: [{ type: String, lowercase: true, trim: true }],
     joiningDate: { type: Date, default: Date.now },
     // ACTIVE/INACTIVE mirrors the existing boolean `active` flag — kept
     // both so legacy queries (active: true) keep working.
