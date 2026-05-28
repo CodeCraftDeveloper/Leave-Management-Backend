@@ -22,6 +22,7 @@ import leaveBalanceRoutes from './routes/leaveBalanceRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 import { startWeeklyDigestScheduler } from './services/weeklyDigestService.js';
+import { backfillDepartments } from './services/departmentSyncService.js';
 
 dotenv.config();
 connectDB();
@@ -82,3 +83,12 @@ app.listen(PORT, () =>
   console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`)
 );
 startWeeklyDigestScheduler();
+backfillDepartments()
+  .then((result) => {
+    if (result.created || result.updatedHeads) {
+      console.log(
+        `Department backfill: created ${result.created}, updated heads on ${result.updatedHeads}`
+      );
+    }
+  })
+  .catch((err) => console.error('Department backfill failed:', err.message));

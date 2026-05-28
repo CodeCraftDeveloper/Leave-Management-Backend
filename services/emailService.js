@@ -5,6 +5,8 @@ import {
   leaveStatusUpdateTemplate,
   emailVerificationTemplate,
   weeklyHeadDigestTemplate,
+  leaveApprovedHeadNoticeTemplate,
+  leaveReversedTemplate,
 } from '../templates/emailTemplates.js';
 
 let transporter;
@@ -58,10 +60,16 @@ const sendMail = async ({ to, subject, html }) => {
   }
 };
 
-// Department-wise routing: the applicant gets a confirmation, and the assigned
-// approver (resolved at apply time) gets the actionable mail. No more
-// hard-coded recipient list — every email is targeted.
-export const sendLeaveAppliedEmails = async ({ employee, leave, approver }) => {
+// Department-wise routing: applicant gets one confirmation; every active
+// reviewer (multi-head aware) gets the actionable mail. Pass either `approver`
+// (single) or `approvers` (array) — the controller chooses based on whether
+// the department has multiple heads.
+export const sendLeaveAppliedEmails = async ({ employee, leave, approver, approvers }) => {
+  const reviewerList = Array.isArray(approvers) && approvers.length
+    ? approvers
+    : approver
+      ? [approver]
+      : [];
   const tasks = [];
 
   if (employee.email) {
@@ -72,14 +80,16 @@ export const sendLeaveAppliedEmails = async ({ employee, leave, approver }) => {
     }));
   }
 
-  if (approver?.email) {
+  const reviewersWithEmail = reviewerList.filter((r) => r?.email);
+  for (const reviewer of reviewersWithEmail) {
     tasks.push(sendMail({
-      to: approver.email,
+      to: reviewer.email,
       subject: `New Leave Request - ${employee.name}`,
-      html: leaveAppliedAdminTemplate({ employee, leave, approver }),
+      html: leaveAppliedAdminTemplate({ employee, leave, approver: reviewer }),
     }));
-  } else {
-    console.warn(`[Email-warn] No approver email for leave ${leave._id} by ${employee.employeeId}`);
+  }
+  if (!reviewersWithEmail.length) {
+    console.warn(`[Email-warn] No reviewer email for leave ${leave._id} by ${employee.employeeId}`);
   }
 
   const results = await Promise.all(tasks);
@@ -110,6 +120,58 @@ export const sendVerificationCodeEmail = async ({ employee, code, expiresInMinut
     subject: 'Verify your email - Prem Industries Leave Portal',
     html: emailVerificationTemplate({ employee, code, expiresInMinutes }),
   });
+};
+
+// Notify every head when a dept_head approves an employee's leave. Heads get
+// an actionable mail because they retain the ability to overturn the approval
+// (before the leave start date) per the two-tier approval rule.
+export const sendLeaveApprovedHeadNotice = async ({ heads, employee, leave, approvedBy }) => {
+  const tasks = heads
+    .filter((head) => head?.email)
+    .map((head) => sendMail({
+      to: head.email,
+      subject: `Leave Approved by Dept Head - ${employee.name}`,
+      html: leaveApprovedHeadNoticeTemplate({ head, employee, leave, approvedBy }),
+    }));
+  if (!tasks.length) {
+    console.warn(`[Email-warn] No head email to notify for leave ${leave._id} by ${employee.employeeId}`);
+    return [];
+  }
+  return Promise.all(tasks);
+};
+
+// Sent when a head overturns a previously approved leave. Employee learns
+// their leave is off; the original dept_head learns their approval was
+// overruled (so they can update the team).
+export const sendLeaveReversedEmail = async ({ employee, originalApprover, leave, reversedBy }) => {
+  const tasks = [];
+  if (employee.email) {
+    tasks.push(sendMail({
+      to: employee.email,
+      subject: 'Leave Approval Overturned',
+      html: leaveReversedTemplate({
+        recipientName: employee.name,
+        employee,
+        leave,
+        reversedBy,
+        wasOriginalApprover: false,
+      }),
+    }));
+  }
+  if (originalApprover?.email && originalApprover._id?.toString() !== reversedBy?._id?.toString()) {
+    tasks.push(sendMail({
+      to: originalApprover.email,
+      subject: `Your Approval Overturned - ${employee.name}`,
+      html: leaveReversedTemplate({
+        recipientName: originalApprover.name,
+        employee,
+        leave,
+        reversedBy,
+        wasOriginalApprover: true,
+      }),
+    }));
+  }
+  return Promise.all(tasks);
 };
 
 export const sendWeeklyHeadDigestEmail = async ({ head, weekStart, weekEnd, leaves }) => {

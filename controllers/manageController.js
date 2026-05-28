@@ -4,8 +4,12 @@ import Leave from '../models/Leave.js';
 import Employee from '../models/Employee.js';
 import Notification from '../models/Notification.js';
 import { assessDepartmentStaffing } from '../utils/staffingCoverage.js';
-import { sendLeaveStatusEmail } from '../services/emailService.js';
-import { onLeaveApproved } from '../services/leaveLifecycleService.js';
+import {
+  sendLeaveStatusEmail,
+  sendLeaveApprovedHeadNotice,
+  sendLeaveReversedEmail,
+} from '../services/emailService.js';
+import { onLeaveApproved, onApprovedLeaveCancelled } from '../services/leaveLifecycleService.js';
 import { getApprovedLeavesForWeek, sendWeeklyHeadDigest } from '../services/weeklyDigestService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
 
@@ -244,6 +248,13 @@ const rejectStaffingLimit = (res, staffingCoverage) => res.status(409).json({
 
 // @desc Approve / reject a leave I'm allowed to review.
 // @route PATCH /api/manage/leaves/:id
+//
+// Two valid transitions:
+//   pending  -> approved | rejected  (dept_head for their team; head for anyone)
+//   approved -> rejected             (head-only override of a dept_head's
+//                                     approval, allowed only before startDate)
+// The override path unwinds the attendance stamps the approval laid down and
+// notifies both the employee and the original approving dept_head.
 export const actionLeave = asyncHandler(async (req, res) => {
   const { status, adminComment, overrideStaffingLimit, staffingOverrideReason } = req.body;
   if (!['approved', 'rejected'].includes(status)) {
@@ -255,13 +266,7 @@ export const actionLeave = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Leave not found');
   }
-  if (leave.status !== 'pending') {
-    res.status(400);
-    throw new Error(`Leave already ${leave.status}`);
-  }
 
-  // Authorisation: head can action anything; dept_head can only action a
-  // leave for an employee in their own department.
   const isHead = req.user.role === 'head';
   const isDeptScoped =
     req.user.role === 'dept_head' &&
@@ -270,6 +275,16 @@ export const actionLeave = asyncHandler(async (req, res) => {
   if (!isHead && !isDeptScoped) {
     res.status(403);
     throw new Error('You cannot action this leave');
+  }
+
+  const isOverride = leave.status === 'approved' && isHead && status === 'rejected';
+  if (leave.status !== 'pending' && !isOverride) {
+    res.status(400);
+    throw new Error(`Leave already ${leave.status}`);
+  }
+  if (isOverride && new Date(leave.startDate) <= new Date()) {
+    res.status(400);
+    throw new Error('Cannot overturn an approval once the leave has started');
   }
 
   let staffingCoverage;
@@ -293,6 +308,9 @@ export const actionLeave = asyncHandler(async (req, res) => {
     }
   }
 
+  // Snapshot who originally approved before we overwrite actionedBy.
+  const originalApproverId = isOverride ? leave.actionedBy : null;
+
   leave.status = status;
   leave.adminComment = adminComment || '';
   leave.actionedBy = req.user._id;
@@ -302,7 +320,13 @@ export const actionLeave = asyncHandler(async (req, res) => {
   leave.staffingSnapshot = status === 'approved' ? staffingCoverage : undefined;
   await leave.save();
 
-  if (status === 'approved') {
+  if (isOverride) {
+    try {
+      await onApprovedLeaveCancelled(leave);
+    } catch (err) {
+      console.error('Leave override cleanup failed:', err.message);
+    }
+  } else if (status === 'approved') {
     try {
       await onLeaveApproved(leave, req.user._id);
     } catch (err) {
@@ -310,14 +334,60 @@ export const actionLeave = asyncHandler(async (req, res) => {
     }
   }
 
-  // Per upgrade spec: on approval/rejection only the applicant is emailed.
-  await Notification.create({
-    recipient: leave.employee._id,
-    title: `Leave ${status}`,
-    message: `Your ${leaveTypeLabel(leave.leaveType)} has been ${status}.${adminComment ? ' Note: ' + adminComment : ''}`,
-    type: status === 'approved' ? 'success' : 'error',
-  });
-  await sendLeaveStatusEmail({ employee: leave.employee, leave });
+  if (isOverride) {
+    const originalApprover = originalApproverId
+      ? await Employee.findById(originalApproverId).select('name email _id employeeId')
+      : null;
+    await Notification.create({
+      recipient: leave.employee._id,
+      title: 'Leave Approval Overturned',
+      message: `Your previously approved ${leaveTypeLabel(leave.leaveType)} has been overturned by Head.${adminComment ? ' Note: ' + adminComment : ''}`,
+      type: 'error',
+    });
+    if (originalApprover && originalApprover._id.toString() !== req.user._id.toString()) {
+      await Notification.create({
+        recipient: originalApprover._id,
+        title: 'Approval Overturned by Head',
+        message: `Head overturned your approval of ${leave.employee.name}'s ${leaveTypeLabel(leave.leaveType)}.`,
+        type: 'warning',
+      });
+    }
+    await sendLeaveReversedEmail({
+      employee: leave.employee,
+      originalApprover,
+      leave,
+      reversedBy: req.user,
+    });
+  } else {
+    await Notification.create({
+      recipient: leave.employee._id,
+      title: `Leave ${status}`,
+      message: `Your ${leaveTypeLabel(leave.leaveType)} has been ${status}.${adminComment ? ' Note: ' + adminComment : ''}`,
+      type: status === 'approved' ? 'success' : 'error',
+    });
+    await sendLeaveStatusEmail({ employee: leave.employee, leave });
+
+    // When a dept_head approves an employee's leave, loop in every head so
+    // they can overturn it if needed. Skip when a head is the one approving
+    // (they already know) or when rejecting (no override path on rejection).
+    if (status === 'approved' && req.user.role === 'dept_head') {
+      const heads = await Employee.find({ role: 'head', active: true }).select('name email _id');
+      if (heads.length) {
+        await Promise.all(heads.map((head) => Notification.create({
+          recipient: head._id,
+          title: 'Leave Approved by Dept Head',
+          message: `${req.user.name} approved ${leave.employee.name}'s ${leaveTypeLabel(leave.leaveType)} for ${leave.totalDays} day(s). You can overturn before it starts.`,
+          type: 'info',
+        })));
+        await sendLeaveApprovedHeadNotice({
+          heads,
+          employee: leave.employee,
+          leave,
+          approvedBy: req.user,
+        });
+      }
+    }
+  }
 
   res.json(leave);
 });

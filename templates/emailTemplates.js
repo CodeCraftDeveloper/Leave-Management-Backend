@@ -78,6 +78,28 @@ export const leaveStatusUpdateTemplate = ({ employee, leave }) => {
   `);
 };
 
+export const leaveApprovedHeadNoticeTemplate = ({ head, employee, leave, approvedBy }) =>
+  wrap(`
+    <h2 style="margin-top:0;">Hi ${head?.name?.split(' ')[0] || 'there'},</h2>
+    <p><b>${approvedBy?.name || 'A department head'}</b> approved a leave request from <b>${employee.name}</b> (${employee.employeeId} &middot; ${employee.department}).</p>
+    ${detailsTable(leave)}
+    ${leave.adminComment ? `<p><b>Approver Comment:</b> ${leave.adminComment}</p>` : ''}
+    <p style="font-size:13px;color:#6b7280;">You can overturn this approval from the Leave Portal up until the leave start date.</p>
+  `);
+
+export const leaveReversedTemplate = ({ recipientName, employee, leave, reversedBy, wasOriginalApprover }) =>
+  wrap(`
+    <h2 style="margin-top:0;">Hi ${recipientName?.split(' ')[0] || 'there'},</h2>
+    <p>
+      ${wasOriginalApprover
+        ? `Head <b>${reversedBy?.name || ''}</b> has overturned your earlier approval of <b>${employee.name}</b>'s leave request.`
+        : `Your previously approved leave has been overturned by <b>${reversedBy?.name || 'a head'}</b>.`}
+    </p>
+    ${detailsTable(leave)}
+    ${leave.adminComment ? `<p><b>Reason:</b> ${leave.adminComment}</p>` : ''}
+    <p style="font-size:13px;color:#6b7280;">The leave status is now <b>REJECTED</b>. Please reach out to the head if you need clarification.</p>
+  `);
+
 export const weeklyHeadDigestTemplate = ({ head, weekStart, weekEnd, leaves }) => {
   const rows = leaves.length
     ? leaves.map((leave) => `
