@@ -22,6 +22,7 @@ export const getApprovedLeavesForWeek = async (referenceDate = new Date()) => {
     status: 'approved',
     startDate: { $lte: weekEnd },
     endDate: { $gte: weekStart },
+    $or: [{ digestSentAt: null }, { digestSentAt: { $exists: false } }],
   })
     .sort({ startDate: 1 })
     .populate('employee', 'name employeeId department email role');
@@ -40,6 +41,13 @@ export const sendWeeklyHeadDigest = async (referenceDate = new Date()) => {
   const results = await Promise.all(
     heads.map((head) => sendWeeklyHeadDigestEmail({ head, weekStart, weekEnd, leaves }))
   );
+
+  if (leaves.length && heads.length) {
+    await Leave.updateMany(
+      { _id: { $in: leaves.map((l) => l._id) } },
+      { $set: { digestSentAt: new Date() } }
+    );
+  }
 
   return {
     weekStart,

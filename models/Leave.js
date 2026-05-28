@@ -37,6 +37,7 @@ const leaveSchema = new mongoose.Schema(
       enum: ['first_half', 'second_half', ''],
       default: '',
     },
+    digestSentAt: { type: Date, default: null, index: true },
   },
   { timestamps: true }
 );
