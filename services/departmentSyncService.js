@@ -1,13 +1,15 @@
 import Department from '../models/Department.js';
 import Employee from '../models/Employee.js';
+import { normalizeDepartmentName } from '../utils/constants.js';
 
 // One-shot backfill: makes sure every distinct Employee.department string has
 // a Department doc, and that every existing dept_head is listed under their
 // department. Idempotent — safe to call on every boot.
 export const backfillDepartments = async () => {
-  const departmentNames = (await Employee.distinct('department', { active: true }))
+  const rawDepartmentNames = (await Employee.distinct('department', { active: true }))
     .map((name) => (typeof name === 'string' ? name.trim() : ''))
     .filter(Boolean);
+  const departmentNames = [...new Set(rawDepartmentNames.map(normalizeDepartmentName).filter(Boolean))];
 
   if (!departmentNames.length) return { created: 0, updatedHeads: 0 };
 
@@ -15,6 +17,14 @@ export const backfillDepartments = async () => {
   let updatedHeads = 0;
 
   for (const name of departmentNames) {
+    const aliases = rawDepartmentNames.filter((rawName) => normalizeDepartmentName(rawName) === name);
+    if (aliases.some((rawName) => rawName !== name)) {
+      await Employee.updateMany(
+        { department: { $in: aliases.filter((rawName) => rawName !== name) } },
+        { $set: { department: name } }
+      );
+    }
+
     let dept = await Department.findOne({ name });
     if (!dept) {
       dept = await Department.create({ name });
@@ -43,33 +53,45 @@ export const backfillDepartments = async () => {
 // with a department's heads list. Used by the department controller whenever
 // the heads list is mutated.
 export const syncEmployeeRoles = async (departmentName, headIds = []) => {
+  const normalizedDepartmentName = normalizeDepartmentName(departmentName);
   const headIdStrings = headIds.map(String);
+  const selectedAssignableHeads = headIdStrings.length
+    ? await Employee.find({
+        _id: { $in: headIdStrings },
+        active: true,
+        role: { $in: ['employee', 'dept_head'] },
+      }).select('_id')
+    : [];
+  const assignableHeadIdStrings = selectedAssignableHeads.map((employee) => String(employee._id));
 
-  // Demote anyone who was a dept_head of this department but is no longer in the list.
+  // Demote only employee-level department heads. Top-level `head` accounts can
+  // be mapped to many departments and must keep their global/scoped head role.
   await Employee.updateMany(
     {
       role: 'dept_head',
-      department: departmentName,
-      _id: { $nin: headIdStrings },
+      department: normalizedDepartmentName,
+      _id: { $nin: assignableHeadIdStrings },
     },
     { $set: { role: 'employee' } }
   );
 
-  // Promote everyone in the list to dept_head and pin their department.
-  if (headIdStrings.length) {
+  // Promote only regular employees selected as department reviewers. Do not
+  // pin top-level `head` accounts to this department.
+  if (assignableHeadIdStrings.length) {
     await Employee.updateMany(
-      { _id: { $in: headIdStrings } },
-      { $set: { role: 'dept_head', department: departmentName } }
+      { _id: { $in: assignableHeadIdStrings } },
+      { $set: { role: 'dept_head', department: normalizedDepartmentName } }
     );
   }
 };
 
 // Propagate a department rename to every employee assigned to the old name.
 export const renameDepartmentMembers = async (oldName, newName) => {
-  if (!oldName || !newName || oldName === newName) return { matched: 0, modified: 0 };
+  const normalizedNewName = normalizeDepartmentName(newName);
+  if (!oldName || !normalizedNewName || oldName === normalizedNewName) return { matched: 0, modified: 0 };
   const result = await Employee.updateMany(
     { department: oldName },
-    { $set: { department: newName } }
+    { $set: { department: normalizedNewName } }
   );
   return { matched: result.matchedCount ?? 0, modified: result.modifiedCount ?? 0 };
 };

@@ -5,7 +5,11 @@ import Holiday from '../models/Holiday.js';
 import { calculateDays, datesOverlap } from '../utils/calculateDays.js';
 import { sendLeaveAppliedEmails, sendLeaveStatusEmail } from '../services/emailService.js';
 import { onApprovedLeaveCancelled } from '../services/leaveLifecycleService.js';
-import { resolveApprover, listDepartmentHeads } from '../utils/approverResolver.js';
+import {
+  resolveApprover,
+  listDepartmentHeads,
+  listDepartmentOverallHeads,
+} from '../utils/approverResolver.js';
 import { isBeforeTodayIST } from '../utils/dateHelpers.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
 import { resolveHeadScope, scopeAllowsDepartment } from '../utils/headScope.js';
@@ -124,7 +128,7 @@ export const applyLeave = asyncHandler(async (req, res) => {
     throw new Error(
       req.user.role === 'employee'
         ? `No department head assigned for ${req.user.department}. Contact a head to set one.`
-        : 'No head is configured to approve dept_head leaves yet.'
+        : `No Head group is assigned for ${req.user.department}. Contact the super admin to set one.`
     );
   }
 
@@ -148,12 +152,13 @@ export const applyLeave = asyncHandler(async (req, res) => {
     type: 'info',
   });
 
-  // Multi-head fan-out: notify every active dept_head of the applicant's
-  // department, not just the one stamped as `approver`. Any of them may
-  // action the request.
+  // Fan-out:
+  // - employee leave -> the department head(s) of the applicant's department
+  // - department-head leave -> the overall Heads group for that department
+  // The stamped approver is still kept for audit/legacy filters.
   const reviewers = req.user.role === 'employee'
     ? await listDepartmentHeads(req.user.department, { excludeId: req.user._id })
-    : [approver];
+    : await listDepartmentOverallHeads(req.user.department, { excludeId: req.user._id });
   const reviewerNotifications = reviewers
     .filter((r) => r && r._id)
     .map((reviewer) => Notification.create({
@@ -161,6 +166,7 @@ export const applyLeave = asyncHandler(async (req, res) => {
       title: 'New Leave Request',
       message: `${req.user.name} (${req.user.employeeId}) requested ${totalDays} day(s) of ${leaveTypeLabel(leaveType)}.`,
       type: 'info',
+      link: req.user.role === 'employee' ? '/manage/leaves?status=pending' : '/head/leaves?status=pending',
     }));
   await Promise.all(reviewerNotifications);
 

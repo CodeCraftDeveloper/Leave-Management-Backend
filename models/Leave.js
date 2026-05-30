@@ -5,7 +5,7 @@ const leaveSchema = new mongoose.Schema(
     employee: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true, index: true },
     // Resolved at apply-time based on applicant's role + department:
     //   employee  -> dept_head of same department
-    //   dept_head -> a head (any)
+    //   dept_head -> overall Heads group of same department
     // Heads do not apply leaves. Field is informational and used to scope review queues.
     approver: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', index: true },
     leaveType: {

@@ -4,6 +4,7 @@ import Employee from '../models/Employee.js';
 import generateToken from '../utils/generateToken.js';
 import { sendVerificationCodeEmail } from '../services/emailService.js';
 import { isSuperAdmin } from '../utils/headScope.js';
+import { normalizeDepartmentName } from '../utils/constants.js';
 
 const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
 const OTP_TTL_MINUTES = 15;
@@ -75,7 +76,7 @@ export const registerEmployee = asyncHandler(async (req, res) => {
     name,
     email,
     password,
-    department,
+    department: normalizeDepartmentName(department),
     designation,
     phone,
     role: role || 'employee',

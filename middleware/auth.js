@@ -41,12 +41,21 @@ export const authorize = (...allowed) => (req, res, next) => {
 export const headOnly = authorize('head');
 
 // The single overall super admin. Heads are department-scoped, so global powers
-// — department CRUD, weekly digest, dept_head role assignment — are reserved for
-// the super admin alone.
+// — weekly digest, org-wide dept_head role assignment — are reserved for the
+// super admin alone.
 export const superAdminOnly = asyncHandler(async (req, res, next) => {
   if (req.user && isSuperAdmin(req.user)) return next();
   res.status(403);
   throw new Error('Only the super admin can perform this action');
+});
+
+// Department + employee management surface. Any `head` may use it, but the
+// controllers further restrict scoped heads to the department(s) they oversee;
+// the super admin is unrestricted.
+export const headOrSuperAdmin = asyncHandler(async (req, res, next) => {
+  if (req.user && (req.user.role === 'head' || isSuperAdmin(req.user))) return next();
+  res.status(403);
+  throw new Error('Only a head or the super admin can perform this action');
 });
 
 // Any reviewer — used for the shared management surface (My Team, review queue).

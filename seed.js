@@ -11,6 +11,7 @@ import Leave from './models/Leave.js';
 import Attendance from './models/Attendance.js';
 import Notification from './models/Notification.js';
 import Holiday from './models/Holiday.js';
+import { normalizeDepartmentName } from './utils/constants.js';
 
 dotenv.config();
 
@@ -70,27 +71,27 @@ const rosterFromText = (text) =>
       return {
         employeeId,
         name,
-        department,
+        department: normalizeDepartmentName(department),
         designation: designation || department,
         headEmailsRaw: headEmails || '',
       };
     });
 
 const fallbackRoster = rosterFromText(`
-H1|HARENDRA PRATAP SINGH|Unit Head
+H1|HARENDRA PRATAP SINGH|Production
 H694|DILEEP SINGH CHANDEL|Production
 H2|SHRI PRAKASH SINGH|Maintenance
 H4|SATENDRA KUMAR KATIYAR|Production
 H336|PAWAN KUMAR|Production
 H34|RAJAN KUMAR|HR & Admin
-H482|VIMLASH|HR
+H482|VIMLASH|HR & Admin
 H532|RADHIKA RANI|Accounts
 H317|PRAVEEN KUMAR|Accounts
 H545|BHARAT BHUSHAN|Accounts
 H704|SATISH KUMAR|Accounts
 H495|REKHA CHINDALIYA|E-com
 H616|ABHAY|E-com
-H624|EKTA KUMARI|Pre Press
+H624|EKTA KUMARI|Pre-Press
 H641|Shikhar Tripathi|Digital Market|Digital Marketing
 H666|CHANDI CHARAN MAHATO|Digital Market|Digital Marketing
 H386|PRADEEP|Digital Market|Digital Marketing
@@ -102,27 +103,27 @@ H568|UDHAM SINGH|Store
 H103|GAURAV KUMAR|Store
 H371|VIKRANT SHISHODIA|Store
 H620|KAMAL YADAV|Store
-H569|HIMANSHU PRAJAPATI|Store-Deo
-H60|OMENDRA PAL SINGH|Dispatch|Supervisor (Dispatch)
-RH277|AKSHAY VAIDWAN|Dispatch|Supervisor (Dispatch)
-H172|ASHWANI TYAGI|Production|Supervisor (Production)
-H241|SATENDRA SINGH|Production|Supervisor (Production)
-H354|ROOP CHAND|Production|Supervisor (Production)
-H601|SANDEEP KUMAR|Production|Supervisor (Production)
-H308|VIVEK MISHRA|Supervisor Ink
-H612|SRIJAN THAPLIYAL|Supervisor Ink
+H569|HIMANSHU PRAJAPATI|Store-Ops
+H60|OMENDRA PAL SINGH|Supervisor (Dispatch)
+RH277|AKSHAY VAIDWAN|Supervisor (Dispatch)
+H172|ASHWANI TYAGI|Supervisor (Production)
+H241|SATENDRA SINGH|Supervisor (Production)
+H354|ROOP CHAND|Supervisor (Production)
+H601|SANDEEP KUMAR|Supervisor (Production)
+H308|VIVEK MISHRA|Supervisor (Ink)
+H612|SRIJAN THAPLIYAL|Supervisor (Ink)
 H91|SANTOSH KUMAR MISHRA|PPC
 H696|SUBODH KUMAR|PPC
 H370|HIMANSHU|PPC
-H582|VIJAYENDRA SINGH TOMAR|PPC-Deo
-H48|RAJESH CHAUHAN|PPC-Deo
+H582|VIJAYENDRA SINGH TOMAR|Pig-In
+H48|RAJESH CHAUHAN|Pig-Dino
 H135|AMIT KUMAR GUPTA|Maintenance
-H137|FAIYAZ KHAN|Maintenance-Metrical
-H179|SATISH KUMAR|Maintenance-Metrical
-H337|BIKAS PASWAN|Maintenance-Metrical
-H527|KAUSHLENDRA KUMAR|Maintenance-Metrical
-H604|RAVINDRA|Maintenance-Metrical
-H63|SUNIL KUMAR|Maintenance-Metrical
+H137|FAIYAZ KHAN|Maintenance-Electrical
+H179|SATISH KUMAR|Maintenance-Electrical
+H337|BIKAS PASWAN|Maintenance-Electrical
+H527|KAUSHLENDRA KUMAR|Maintenance-Electrical
+H604|RAVINDRA|Maintenance-Electrical
+H63|SUNIL KUMAR|Maintenance-Electrical
 H131|SHIVAM KUMAR PATHAK|Maintenance-Mechanical
 H149|RAHUL KUSHWAHA|Maintenance-Mechanical
 H590|PRASHANT KUMAR|Maintenance-Mechanical
@@ -139,61 +140,61 @@ H599|AKHILESH KUMAR|Printing-01
 H508|GOPAL|Printing-01
 H509|DINESH KUMAR|Printing-01
 H575|SANTOSH KUMAR YADAV|Printing-01
-H504|ASHISH KUMAR|Printing-02
-H357|GOURAV TIWARI|Printing-02
-H451|SACHIN|Printing-02
-H420|ANKIT KUMAR|Printing-02
-H401|RAHUL KUMAR|Printing-02
-H498|VIRENDRA PAL|Printing Ink
-H501|RAHUL KUMAR|Printing Ink
-H573|AJIT KUMAR|Printing Ink
-H554|KHYATI PRASAD|Printing Ink
-H538|RAVINDER KUMAR|Printing Ink
-H650|AMIT KUMAR|Printing Ink
-H682|AMIT KUMAR PANDEY|Printing Ink
-H658|HARISH CHAND RAWAT|Printing Incharge
-H505|RAMDEEN|Printing Incharge
+H504|ASHISH KUMAR|Printing-11
+H357|GOURAV TIWARI|Printing-11
+H451|SACHIN|Printing-11
+H420|ANKIT KUMAR|Printing-17
+H401|RAHUL KUMAR|Printing-17
+H498|VIRENDRA PAL|Printing-Ink
+H501|RAHUL KUMAR|Printing-Ink
+H573|AJIT KUMAR|Printing-Ink
+H554|KHYATI PRASAD|Printing-Ink
+H538|RAVINDER KUMAR|Printing-Ink
+H650|AMIT KUMAR|Printing-Ink
+H682|AMIT KUMAR PANDEY|Printing-Ink
+H658|HARISH CHAND RAWAT|Printing-Slitting
+H505|RAMDEEN|Printing-Slitting
 H697|MUNIB YADAV|Printing-01
-H638|PRASHANT|Printing-02
-H678|PAWAN KUMAR|Printing-02
-H603|RAHUL|Printing-02
+H638|PRASHANT|Printing-17
+H678|PAWAN KUMAR|Printing-17
+H603|RAHUL|Printing-17
 H703|ASHUTOSH|Printing-01
-H700|RAVI KUMAR|Printing-02
+H700|RAVI KUMAR|Printing-17
 H16|ANKUR CHAUDHARY|Extrusion
 H37|AMARNATH SINGH|Extrusion
 H200|SHISHU LAL KUMAR|Extrusion
 H497|DAYANAND|Extrusion
 H628|AMRENDRA|Extrusion
-H20|PRAVEEN KUMAR|Inspection
-H70|RAVI KUMAR|Inspection
-H530|RAKESH KUMAR|Inspection
-H65|SARVESH KUMAR|Inspection
-H691|SACHIN|Inspection
-H59|DEEPAK BISHT|Lamination - SOLVENT LESS
-H721|SATENDRA KUMAR|Lamination - SOLVENT LESS
-H225|SACHIN SHARMA|Lamination - SOLVENT LESS
-H92|SONU KUMAR|Lamination - SOLVENT LESS
-H723|PRAVEEN KUMAR|Lamination - SOLVENT LESS
-H625|VIKASH KUMAR|Lamination - SOLVENT LESS
-H621|VIKASH KUMAR|Lamination - SOLVENT LESS
-H679|BIRJU|Lamination - SOLVENT LESS
-H607|SURAJ RAM|Lamination - SOLVENT LESS
-H147|POOJA PRAKASH|Lamination - NARENDA
-H684|NAVEEN KUMAR|Lamination - NARENDA
-H690|ANISH MISHRA|Lamination - NARENDA
-H677|KANIRAM|Lamination - NARENDA
-H56|VIPIN PANDIT|Lamination - SOLVENT LESS
-H548|ATUL KUMAR|Lamination - SOLVENT BASE
-H537|SURENDRA KUMAR YADAV|Lamination - SOLVENT BASE
-H536|SUNIL KUMAR SHARMA|Lamination - NARENDA
-H574|SANJAY SINGH|Lamination - SOLVENT BASE
-H557|DIWAKAR NISHAD|Lamination - SOLVENT BASE
-H645|VIPIN PRAJAPATI|Lamination - SOLVENT BASE
-H676|PRABHAKAR|Lamination - SOLVENT BASE
-H692|KAPIL KUMAR|Lamination - SOLVENT LESS
-H698|VIKAS KUMAR|Lamination - SOLVENT BASE
-H699|UTTAM SINGH|Lamination - SOLVENT LESS
-H706|SANJAY KUMAR SINGH|Lamination - NARENDA
+H20|PRAVEEN KUMAR|Boiler
+H70|RAVI KUMAR|Boiler
+H530|RAKESH KUMAR|Boiler
+H65|SARVESH KUMAR|Boiler
+H691|SACHIN|Boiler
+H59|DEEPAK BISHT|Lamination - SEW NW HSS
+H721|SATENDRA KUMAR|Lamination - SEW NW HSS
+H225|SACHIN SHARMA|Lamination - SEW NW HSS
+H92|SONU KUMAR|Lamination - SEW NW HSS
+H723|PRAVEEN KUMAR|Lamination - SEW NW HSS
+H625|VIKASH KUMAR|Lamination - SEW NW HSS
+H621|VIKASH KUMAR|Lamination - SEW NW HSS
+H679|BIRJU|Lamination - SEW NW HSS
+H607|SURAJ RAM|Lamination - SEW NW HSS
+H147|POOJA PRAKASH|Lamination
+H684|NAVEEN KUMAR|Lamination
+H690|ANISH MISHRA|Lamination
+H677|KANIRAM|Lamination
+H56|VIPIN PANDIT|Lamination - SEW NW HSS
+H548|ATUL KUMAR|Lamination - SEW NW BASF
+H537|SURENDRA KUMAR YADAV|Lamination - SEW NW BASF
+H536|SUNIL KUMAR SHARMA|Lamination
+H574|SANJAY SINGH|Lamination - SEW NW BASF
+H557|DIWAKAR NISHAD|Lamination - SEW NW BASF
+H645|VIPIN PRAJAPATI|Lamination - SEW NW BASF
+H676|PRABHAKAR|Lamination - SEW NW BASF
+H692|KAPIL KUMAR|Lamination - SEW NW HSS
+H698|VIKAS KUMAR|Lamination - SEW NW BASF
+H699|UTTAM SINGH|Lamination - SEW NW HSS
+H706|SANJAY KUMAR SINGH|Lamination
 H51|PRAMOD SINGH SIKARWAR|Slitting
 H62|ROOPENDRA KUMAR|Slitting
 H516|TEJVEER SINGH|Slitting
@@ -260,9 +261,9 @@ H712|YATISH|Pouch
 H728|RANJAN|Pouch
 H626|VIPIN KUMAR|Pantry
 H653|DEEPAK KUMAR|Pantry
-H465|ASHISH YADAV|Fomfit
-H695|RAVIKANT|Fomfit
-H688|RADHE MOHAN|Fomfit
+H465|ASHISH YADAV|Forklift
+H695|RAVIKANT|Forklift
+H688|RADHE MOHAN|Forklift
 H367|SURYA NATH MISHRA|Warehouse
 H72|SURESH SINGH|Warehouse
 H713|DEV RATAN TIWARI|Extrusion
@@ -277,10 +278,10 @@ H112|MOHAN|Blown Film
 H118|RAMAN|Blown Film
 H100|SUNIL KUMAR|Blown Film
 H273|BHARAT PRASAD|Blown Film - Recycle
-H717|UMESH KUMAR|Blown Film - Unit - 4
-H718|SHOBHIT|Blown Film - Unit - 4
-H719|JITENDRA KUMAR|Blown Film - Unit - 4
-H720|VINAY SINGH CHAUCHAN|Blown Film - Unit - 4
+H717|UMESH KUMAR|Blown Film Unit-4
+H718|SHOBHIT|Blown Film Unit-4
+H719|JITENDRA KUMAR|Blown Film Unit-4
+H720|VINAY SINGH CHAUCHAN|Blown Film Unit-4
 `);
 
 const normalizeCell = (value) => {
@@ -347,13 +348,14 @@ const inferredHeadEmailsForDepartment = (department = '') => {
     dept.includes('admin') ||
     dept.includes('account') ||
     dept.includes('e-com') ||
-    dept.includes('pre press')
+    dept.includes('pre press') ||
+    dept.includes('pre-press')
   ) {
     return [HEAD_EMAILS.rajan, HEAD_EMAILS.saurabh];
   }
   if (dept === 'maintenance') return [HEAD_EMAILS.rajan, HEAD_EMAILS.hp];
   if (dept.includes('maintenance')) return [HEAD_EMAILS.sp];
-  if (dept.includes('ppc')) return [HEAD_EMAILS.satendra];
+  if (dept.includes('ppc') || dept.includes('pig-')) return [HEAD_EMAILS.satendra];
   if (
     dept.includes('printing') ||
     dept.includes('extrusion') ||
@@ -411,7 +413,7 @@ const readWorkbookRoster = async () => {
       email: '',
       headEmails: extractEmails(getRawCell(row, 'email')),
       password: getCell(row, 'password') || TEMP_PASSWORD,
-      department: getCell(row, 'department') || 'General',
+      department: normalizeDepartmentName(getCell(row, 'department')) || 'General',
       designation: getCell(row, 'designation') || getCell(row, 'department') || 'Employee',
       role: getCell(row, 'role') || undefined,
       phone: getCell(row, 'phone') || undefined,
@@ -481,7 +483,7 @@ const buildHeadSeeds = (roster) => {
     email: isPrimaryHeadEmail(email) ? email : undefined,
     notificationEmail: email,
     password: isPrimaryHeadEmail(email) ? 'admin123' : TEMP_PASSWORD,
-    department: 'Management',
+    department: 'HR & Admin',
     designation: 'Head',
   }));
 };

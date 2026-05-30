@@ -10,6 +10,81 @@ export const ROLES = Object.freeze({
 // Roles that can review/approve leave requests of others.
 export const REVIEWER_ROLES = Object.freeze(['dept_head', 'head']);
 
+export const DEPARTMENT_NAMES = Object.freeze([
+  'Production',
+  'Maintenance',
+  'HR & Admin',
+  'Accounts',
+  'E-com',
+  'Pre-Press',
+  'Digital Market',
+  'Billing',
+  'EPR',
+  'Store',
+  'Store-Ops',
+  'Supervisor (Dispatch)',
+  'Supervisor (Production)',
+  'Supervisor (Ink)',
+  'PPC',
+  'Pig-In',
+  'Pig-Dino',
+  'Maintenance-Electrical',
+  'Maintenance-Mechanical',
+  'Printing-Cylinder',
+  'Printing-01',
+  'Printing-11',
+  'Printing-17',
+  'Printing-Ink',
+  'Printing-Slitting',
+  'Extrusion',
+  'Lamination',
+  'Lamination - SEW NW HSS',
+  'Lamination - SEW NW BASF',
+  'Slitting',
+  'Quality',
+  'Pouch',
+  'Boiler',
+  'Pantry',
+  'Forklift',
+  'Warehouse',
+  'Driver',
+  'Blown Film',
+  'Blown Film - Recycle',
+  'Blown Film Unit-4',
+]);
+
+const normalizedDepartmentLookup = new Map(
+  DEPARTMENT_NAMES.map((name) => [name.toLowerCase(), name])
+);
+
+const DEPARTMENT_ALIASES = Object.freeze({
+  'unit head': 'Production',
+  hr: 'HR & Admin',
+  'pre press': 'Pre-Press',
+  'store-deo': 'Store-Ops',
+  dispatch: 'Supervisor (Dispatch)',
+  'supervisor ink': 'Supervisor (Ink)',
+  'ppc-deo': 'Pig-Dino',
+  'maintenance-metrical': 'Maintenance-Electrical',
+  inspection: 'Boiler',
+  'printing-02': 'Printing-17',
+  'printing ink': 'Printing-Ink',
+  'printing incharge': 'Printing-Slitting',
+  'lamination - solvent less': 'Lamination - SEW NW HSS',
+  'lamination - solvent base': 'Lamination - SEW NW BASF',
+  'lamination - narenda': 'Lamination',
+  fomfit: 'Forklift',
+  management: 'HR & Admin',
+  'blown film - unit - 4': 'Blown Film Unit-4',
+});
+
+export const normalizeDepartmentName = (value) => {
+  const name = typeof value === 'string' ? value.trim() : '';
+  if (!name) return '';
+  const key = name.toLowerCase();
+  return normalizedDepartmentLookup.get(key) || DEPARTMENT_ALIASES[key] || name;
+};
+
 // The single overall super admin. Every other `head` is scoped to the
 // department(s) they are mapped to via Department.heads; only this account
 // has full, org-wide visibility and the global management powers (department

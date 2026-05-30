@@ -5,11 +5,11 @@ const HEAD_FIELDS = '_id name email employeeId department role';
 
 // Resolve who approves a leave for a given applicant.
 //
-//   employee  -> any active dept_head of their department (multi-head aware).
-//                Prefers the Department.heads list; falls back to legacy
-//                role/department lookup so old data without a Department row
-//                still routes correctly.
-//   dept_head -> a head (any). Heads don't apply leave, so they have no approver.
+//   employee  -> the active dept_head of their department.
+//                Department.heads can also contain overall `head` users, so
+//                this path must explicitly filter to role `dept_head`.
+//   dept_head -> an overall head for their department. Heads don't apply leave,
+//                so they have no approver.
 //
 // Returns the Employee doc (lean) or null when no suitable approver exists.
 export const resolveApprover = async (applicant) => {
@@ -25,6 +25,8 @@ export const resolveApprover = async (applicant) => {
       const head = await Employee.findOne({
         _id: { $in: department.heads, $ne: applicant._id },
         active: true,
+        role: 'dept_head',
+        department: applicant.department,
       })
         .select(HEAD_FIELDS)
         .lean();
@@ -43,10 +45,17 @@ export const resolveApprover = async (applicant) => {
   }
 
   if (applicant.role === 'dept_head') {
+    const department = await Department.findOne({
+      name: applicant.department,
+      active: true,
+    }).select('heads');
+
+    if (!department?.heads?.length) return null;
+
     return Employee.findOne({
+      _id: { $in: department.heads, $ne: applicant._id },
       role: 'head',
       active: true,
-      _id: { $ne: applicant._id },
     })
       .select(HEAD_FIELDS)
       .lean();
@@ -56,8 +65,8 @@ export const resolveApprover = async (applicant) => {
 };
 
 // All currently-active dept_heads of a department, used by the review-queue
-// scope (so each head of a multi-head department sees the same queue) and by
-// the notification fan-out on apply.
+// scope and by notification fan-out on apply. Overall `head` users are not
+// included here; they are notified only after a dept_head approves.
 export const listDepartmentHeads = async (departmentName, { excludeId } = {}) => {
   if (!departmentName) return [];
   const department = await Department.findOne({
@@ -67,9 +76,31 @@ export const listDepartmentHeads = async (departmentName, { excludeId } = {}) =>
 
   const ids = department?.heads?.length ? department.heads : null;
   const filter = ids
-    ? { _id: { $in: ids }, active: true }
+    ? { _id: { $in: ids }, active: true, role: 'dept_head', department: departmentName }
     : { role: 'dept_head', department: departmentName, active: true };
   if (excludeId) filter._id = { ...(filter._id || {}), $ne: excludeId };
+
+  return Employee.find(filter).select(HEAD_FIELDS).lean();
+};
+
+// Overall Heads group for a department. These users receive the post-approval
+// workforce review notification and can overturn an approved leave before it
+// starts.
+export const listDepartmentOverallHeads = async (departmentName, { excludeId } = {}) => {
+  if (!departmentName) return [];
+  const department = await Department.findOne({
+    name: departmentName,
+    active: true,
+  }).select('heads');
+
+  if (!department?.heads?.length) return [];
+
+  const filter = {
+    _id: { $in: department.heads },
+    active: true,
+    role: 'head',
+  };
+  if (excludeId) filter._id = { ...filter._id, $ne: excludeId };
 
   return Employee.find(filter).select(HEAD_FIELDS).lean();
 };

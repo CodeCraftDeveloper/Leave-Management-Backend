@@ -2,6 +2,7 @@ import asyncHandler from 'express-async-handler';
 import ExcelJS from 'exceljs';
 import Leave from '../models/Leave.js';
 import Employee from '../models/Employee.js';
+import Department from '../models/Department.js';
 import Notification from '../models/Notification.js';
 import { assessDepartmentStaffing } from '../utils/staffingCoverage.js';
 import {
@@ -13,12 +14,10 @@ import { onLeaveApproved, onApprovedLeaveCancelled } from '../services/leaveLife
 import { getApprovedLeavesForWeek, sendWeeklyHeadDigest } from '../services/weeklyDigestService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
 import { isSuperAdmin, resolveHeadScope, scopeAllowsDepartment } from '../utils/headScope.js';
+import { normalizeDepartmentName } from '../utils/constants.js';
+import { listDepartmentOverallHeads } from '../utils/approverResolver.js';
 
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
-
-const headRoutingEmailsForLeave = (leave) => [
-  ...new Set((leave.employee?.headNotificationEmails || []).map(normalizeEmail).filter(Boolean)),
-];
 
 // Build the Mongo filter for leave rows that `req.user` is allowed to review.
 // dept_head:   leaves where they are the assigned approver. We also include
@@ -367,6 +366,7 @@ export const actionLeave = asyncHandler(async (req, res) => {
       title: 'Leave Approval Overturned',
       message: `Your previously approved ${leaveTypeLabel(leave.leaveType)} has been overturned by Head.${adminComment ? ' Note: ' + adminComment : ''}`,
       type: 'error',
+      link: '/history',
     });
     if (originalApprover && originalApprover._id.toString() !== req.user._id.toString()) {
       await Notification.create({
@@ -374,6 +374,7 @@ export const actionLeave = asyncHandler(async (req, res) => {
         title: 'Approval Overturned by Head',
         message: `Head overturned your approval of ${leave.employee.name}'s ${leaveTypeLabel(leave.leaveType)}.`,
         type: 'warning',
+        link: '/manage/leaves?status=rejected',
       });
     }
     await sendLeaveReversedEmail({
@@ -388,27 +389,24 @@ export const actionLeave = asyncHandler(async (req, res) => {
       title: `Leave ${status}`,
       message: `Your ${leaveTypeLabel(leave.leaveType)} has been ${status}.${adminComment ? ' Note: ' + adminComment : ''}`,
       type: status === 'approved' ? 'success' : 'error',
+      link: '/history',
     });
     await sendLeaveStatusEmail({ employee: leave.employee, leave });
 
-    // When a dept_head approves an employee's leave, notify only the employee's
-    // mapped Head group from the roster/workbook. Skip when a head is the one
-    // approving (they already know) or when rejecting.
+    // When a dept_head approves an employee's leave, notify the department's
+    // overall Heads group. They receive the workforce-review signal and can
+    // overturn the approval before the leave starts.
     if (status === 'approved' && req.user.role === 'dept_head') {
-      const headEmails = headRoutingEmailsForLeave(leave);
-      const heads = await Employee.find({
-        role: 'head',
-        active: true,
-        ...(headEmails.length
-          ? { $or: [{ email: { $in: headEmails } }, { notificationEmail: { $in: headEmails } }] }
-          : {}),
-      }).select('name email notificationEmail _id');
+      const heads = await listDepartmentOverallHeads(leave.employee.department, {
+        excludeId: req.user._id,
+      });
       if (heads.length) {
         await Promise.all(heads.map((head) => Notification.create({
           recipient: head._id,
           title: 'Leave Approved by Dept Head',
           message: `${req.user.name} approved ${leave.employee.name}'s ${leaveTypeLabel(leave.leaveType)} for ${leave.totalDays} day(s). You can overturn before it starts.`,
           type: 'info',
+          link: '/head/leaves?status=approved',
         })));
         await sendLeaveApprovedHeadNotice({
           heads,
@@ -421,6 +419,68 @@ export const actionLeave = asyncHandler(async (req, res) => {
   }
 
   res.json(leave);
+});
+
+// @desc Create a new employee in the global database and assign their
+//       department. Heads can only create into a department they oversee; the
+//       super admin can target any department.
+// @route POST /api/manage/employees
+export const createEmployee = asyncHandler(async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const employeeId = String(req.body.employeeId || '').trim().toUpperCase();
+  const email = normalizeEmail(req.body.email);
+  const phone = String(req.body.phone || '').trim();
+  const designation = String(req.body.designation || '').trim() || 'Employee';
+  const department = normalizeDepartmentName(req.body.department) || String(req.body.department || '').trim();
+  const password = String(req.body.password || '').trim() || 'changeme123';
+
+  if (!name || !employeeId) {
+    res.status(400);
+    throw new Error('Name and employee ID are required');
+  }
+  if (!department) {
+    res.status(400);
+    throw new Error('A department is required');
+  }
+  if (password.length < 6) {
+    res.status(400);
+    throw new Error('Password must be at least 6 characters');
+  }
+
+  // Scoped heads may only create staff inside the department(s) they oversee.
+  const scope = await resolveHeadScope(req.user);
+  if (!scope.isSuper && !scopeAllowsDepartment(scope, department)) {
+    res.status(403);
+    throw new Error('You can only add employees to a department you head');
+  }
+
+  const idClash = await Employee.findOne({ employeeId });
+  if (idClash) {
+    res.status(409);
+    throw new Error(`Employee ID ${employeeId} is already taken`);
+  }
+  if (email) {
+    const emailClash = await Employee.findOne({ email });
+    if (emailClash) {
+      res.status(409);
+      throw new Error('That email is already registered');
+    }
+  }
+
+  const employee = await Employee.create({
+    name,
+    employeeId,
+    email: email || undefined,
+    phone,
+    designation,
+    department,
+    password,
+    role: 'employee',
+  });
+
+  const safe = employee.toObject();
+  delete safe.password;
+  res.status(201).json({ message: `${name} added to ${department}`, employee: safe });
 });
 
 // @desc Head-only role assignment: employee <-> dept_head
@@ -454,6 +514,18 @@ export const updateEmployeeRole = asyncHandler(async (req, res) => {
 
   employee.role = role;
   await employee.save();
+
+  if (role === 'dept_head') {
+    await Department.updateOne(
+      { name: employee.department, active: true },
+      { $addToSet: { heads: employee._id } }
+    );
+  } else {
+    await Department.updateMany(
+      { heads: employee._id },
+      { $pull: { heads: employee._id } }
+    );
+  }
 
   res.json({
     message: role === 'dept_head'

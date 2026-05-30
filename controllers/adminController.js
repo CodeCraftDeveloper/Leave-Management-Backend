@@ -11,6 +11,7 @@ import { sendLeaveStatusEmail } from '../services/emailService.js';
 import { onLeaveApproved } from '../services/leaveLifecycleService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
 import { resolveHeadScope, intersectWithScope, scopeAllowsDepartment } from '../utils/headScope.js';
+import { normalizeDepartmentName } from '../utils/constants.js';
 
 // Guard: a scoped head may only act on employees inside their department(s).
 // The super admin (scope.isSuper) always passes.
@@ -28,7 +29,7 @@ const normalizeEmployeeInput = (payload, { requirePassword = false } = {}) => {
   const name = typeof payload.name === 'string' ? payload.name.trim() : '';
   const email = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
   const phone = typeof payload.phone === 'string' ? payload.phone.trim() : '';
-  const department = typeof payload.department === 'string' ? payload.department.trim() : '';
+  const department = normalizeDepartmentName(payload.department);
   const designation = typeof payload.designation === 'string' ? payload.designation.trim() : '';
   const password = typeof payload.password === 'string' ? payload.password : '';
   const joiningDate = payload.joiningDate ? new Date(payload.joiningDate) : undefined;
@@ -139,6 +140,10 @@ export const getDashboard = asyncHandler(async (req, res) => {
     .populate('employee', 'name employeeId department');
 
   res.json({
+    scope: {
+      isSuperAdmin: scope.isSuper,
+      departments: scope.isSuper ? [] : scope.departmentNames,
+    },
     stats: { totalEmployees, pending, approved, rejected },
     monthly: monthlyMap,
     recent,
@@ -532,7 +537,7 @@ export const deleteEmployee = asyncHandler(async (req, res) => {
 // @route PATCH /api/admin/employees/:id/work-details
 export const updateEmployeeWorkDetails = asyncHandler(async (req, res) => {
   const { department, designation } = req.body;
-  const trimmedDepartment = typeof department === 'string' ? department.trim() : '';
+  const trimmedDepartment = normalizeDepartmentName(department);
   const trimmedDesignation = typeof designation === 'string' ? designation.trim() : '';
 
   if (!trimmedDepartment || !trimmedDesignation) {
