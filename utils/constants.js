@@ -26,16 +26,13 @@ export const DEPARTMENT_NAMES = Object.freeze([
   'Supervisor (Production)',
   'Supervisor (Ink)',
   'PPC',
-  'Pig-In',
-  'Pig-Dino',
   'Maintenance-Electrical',
   'Maintenance-Mechanical',
   'Printing-Cylinder',
   'Printing-01',
-  'Printing-11',
-  'Printing-17',
+  'Printing-02',
+  'Printing-Incharge',
   'Printing-Ink',
-  'Printing-Slitting',
   'Extrusion',
   'Lamination',
   'Lamination - SEW NW HSS',
@@ -65,40 +62,98 @@ const normalizedDepartmentLookup = new Map(
 );
 
 const DEPARTMENT_ALIASES = Object.freeze({
-  'unit head': 'Production',
+  // General
   hr: 'HR & Admin',
+  'hr admin': 'HR & Admin',
+  management: 'HR & Admin',
+
+  // Pre Press
   'pre press': 'Pre-Press',
+  'pre-press': 'Pre-Press',
+
+  // Store
+  'store deo': 'Store-Ops',
   'store-deo': 'Store-Ops',
+
+  // Supervisors
   dispatch: 'Supervisor (Dispatch)',
+  'supervisor dispatch': 'Supervisor (Dispatch)',
+  'supervisor(dispatch)': 'Supervisor (Dispatch)',
+
+  'supervisor production': 'Supervisor (Production)',
+  'supervisor(production)': 'Supervisor (Production)',
+
   'supervisor ink': 'Supervisor (Ink)',
-  'ppc-deo': 'Pig-Dino',
+  'supervisor(ink)': 'Supervisor (Ink)',
+
+  // PPC
+  'ppc-deo': 'PPC',
+
+  // Maintenance
   'maintenance-metrical': 'Maintenance-Electrical',
+  'maintenance welder': 'Maintenance-Mechanical',
   'maintenance-welder': 'Maintenance-Mechanical',
-  inspection: 'Boiler',
-  'printing-02': 'Printing-17',
+
+  // Printing
+  'printing cylinder': 'Printing-Cylinder',
+  'printing-cylinder': 'Printing-Cylinder',
+
+  'printing 01': 'Printing-01',
+  'printing-1': 'Printing-01',
+
+  'printing 02': 'Printing-02',
+  'printing-2': 'Printing-02',
+
+  'printing incharge': 'Printing-Incharge',
+  'printing-incharge': 'Printing-Incharge',
+  'printing-incahrge': 'Printing-Incharge',
+
   'printing ink': 'Printing-Ink',
-  'printing incharge': 'Printing-Slitting',
-  'printing-incharge': 'Printing-Slitting',
+  'printing-ink': 'Printing-Ink',
+
+  // Lamination
+  'lamination solvent less': 'Lamination - SEW NW HSS',
   'lamination - solvent less': 'Lamination - SEW NW HSS',
+
+  'lamination solvent base': 'Lamination - SEW NW BASF',
   'lamination - solvent base': 'Lamination - SEW NW BASF',
-  'lamination - narenda': 'Lamination',
+
+  'lamination narendra': 'Lamination',
   'lamination-narendra': 'Lamination',
+  'lamination - narendra': 'Lamination',
+
+  // Quality
+  inspection: 'Quality',
+
+  // Forklift
   forlift: 'Forklift',
   fomfit: 'Forklift',
-  management: 'HR & Admin',
-  'blown film - unit - 4': 'Blown Film Unit-4',
+
+  // Blown Film
+  'blown film unit 4': 'Blown Film Unit-4',
   'blown-film unit-4': 'Blown Film Unit-4',
+  'blown film-unit-4': 'Blown Film Unit-4',
+  'blown film - unit - 4': 'Blown Film Unit-4',
 });
 
 const normalizedDepartmentAliasLookup = new Map(
-  Object.entries(DEPARTMENT_ALIASES).map(([alias, name]) => [normalizeDepartmentKey(alias), name])
+  Object.entries(DEPARTMENT_ALIASES).map(([alias, name]) => [
+    normalizeDepartmentKey(alias),
+    name,
+  ])
 );
 
 export const normalizeDepartmentName = (value) => {
   const name = typeof value === 'string' ? value.trim() : '';
   if (!name) return '';
+
   const key = normalizeDepartmentKey(name);
-  return normalizedDepartmentLookup.get(key) || normalizedDepartmentAliasLookup.get(key) || name;
+
+  return (
+    normalizedDepartmentLookup.get(key) ||
+    normalizedDepartmentAliasLookup.get(key) ||
+    name
+  );
 };
 
 // The single overall super admin. Every other `head` is scoped to the
