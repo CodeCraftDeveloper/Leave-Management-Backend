@@ -11,44 +11,49 @@ export const ROLES = Object.freeze({
 export const REVIEWER_ROLES = Object.freeze(['dept_head', 'head']);
 
 export const DEPARTMENT_NAMES = Object.freeze([
-  'Production',
-  'Maintenance',
-  'HR & Admin',
   'Accounts',
-  'E-com',
-  'Pre-Press',
-  'Digital Market',
   'Billing',
-  'EPR',
-  'Store',
-  'Store-Ops',
-  'Supervisor (Dispatch)',
-  'Supervisor (Production)',
-  'Supervisor (Ink)',
-  'PPC',
-  'Maintenance-Electrical',
-  'Maintenance-Mechanical',
-  'Printing-Cylinder',
-  'Printing-01',
-  'Printing-02',
-  'Printing-Incharge',
-  'Printing-Ink',
-  'Extrusion',
-  'Lamination',
-  'Lamination - SEW NW HSS',
-  'Lamination - SEW NW BASF',
-  'Slitting',
-  'Inspection',
-  'Quality',
-  'Pouch',
-  'Boiler',
-  'Pantry',
-  'Forklift',
-  'Warehouse',
-  'Driver',
+  'Blown -Film Unit -4',
   'Blown Film',
   'Blown Film - Recycle',
-  'Blown Film Unit-4',
+  'Boiler',
+  'DRIVER',
+  'Digital Market',
+  'E-com',
+  'EPR',
+  'Extrusion',
+  'Forklift',
+  'Forlift',
+  'Hr',
+  'Hr & Admin',
+  'Inspection',
+  'Lamination - SOLVENT BASE',
+  'Lamination - SOLVENT LESS',
+  'Lamination- NARENDRA',
+  'Maintenance',
+  'Maintenance-Electrical',
+  'Maintenance-Mechanical',
+  'Maintenance-Welder',
+  'PPC',
+  'Pantry',
+  'Pouch',
+  'Ppc',
+  'Ppc-Deo',
+  'Pre -Press',
+  'Printing -01',
+  'Printing -02',
+  'Printing-Incahrge',
+  'Printing-Ink',
+  'Printing-cylinder',
+  'Production',
+  'Quality',
+  'Slitting',
+  'Store',
+  'Store -Deo',
+  'Supervisor( Dispatch)',
+  'Supervisor(Ink )',
+  'Supervisor(Production)',
+  'WAREHOUSE',
 ]);
 
 const normalizeDepartmentKey = (value) =>
@@ -58,87 +63,108 @@ const normalizeDepartmentKey = (value) =>
     .replace(/\s+/g, ' ')
     .replace(/\s*-\s*/g, '-');
 
-const normalizedDepartmentLookup = new Map(
-  DEPARTMENT_NAMES.map((name) => [normalizeDepartmentKey(name), name])
-);
+// First-entry-wins Map so the earliest DEPARTMENT_NAMES entry for a
+// given normalized key is treated as the canonical fallback.
+const normalizedDepartmentLookup = new Map();
+for (const name of DEPARTMENT_NAMES) {
+  const key = normalizeDepartmentKey(name);
+  if (!normalizedDepartmentLookup.has(key)) {
+    normalizedDepartmentLookup.set(key, name);
+  }
+}
+
+
 
 const DEPARTMENT_ALIASES = Object.freeze({
   // General
-  hr: 'HR & Admin',
-  'hr admin': 'HR & Admin',
-  management: 'HR & Admin',
+  'hr admin': 'Hr & Admin',
+  management: 'Hr & Admin',
 
   // Pre Press
-  'pre press': 'Pre-Press',
-  'pre-press': 'Pre-Press',
+  'pre press': 'Pre -Press',
+  'pre-press': 'Pre -Press',
 
   // Store
-  'store deo': 'Store-Ops',
-  'store-deo': 'Store-Ops',
+  'store deo': 'Store -Deo',
+  'store-deo': 'Store -Deo',
 
   // Supervisors
-  dispatch: 'Supervisor (Dispatch)',
-  'supervisor dispatch': 'Supervisor (Dispatch)',
-  'supervisor(dispatch)': 'Supervisor (Dispatch)',
-  'supervisor( dispatch)': 'Supervisor (Dispatch)',
-  'supervisor(dispatch )': 'Supervisor (Dispatch)',
+  dispatch: 'Supervisor( Dispatch)',
+  'supervisor dispatch': 'Supervisor( Dispatch)',
+  'supervisor (dispatch)': 'Supervisor( Dispatch)',
+  'supervisor( dispatch)': 'Supervisor( Dispatch)',
+  'supervisor(dispatch )': 'Supervisor( Dispatch)',
 
-  'supervisor production': 'Supervisor (Production)',
-  'supervisor(production)': 'Supervisor (Production)',
-  'supervisor( production)': 'Supervisor (Production)',
-  'supervisor(production )': 'Supervisor (Production)',
+  'supervisor production': 'Supervisor(Production)',
+  'supervisor (production)': 'Supervisor(Production)',
+  'supervisor( production)': 'Supervisor(Production)',
+  'supervisor(production )': 'Supervisor(Production)',
 
-  'supervisor ink': 'Supervisor (Ink)',
-  'supervisor(ink)': 'Supervisor (Ink)',
-  'supervisor( ink)': 'Supervisor (Ink)',
-  'supervisor(ink )': 'Supervisor (Ink)',
+  'supervisor ink': 'Supervisor(Ink )',
+  'supervisor (ink)': 'Supervisor(Ink )',
+  'supervisor( ink)': 'Supervisor(Ink )',
+  'supervisor(ink )': 'Supervisor(Ink )',
 
   // PPC
-  'ppc-deo': 'PPC',
+  ppc_deo: 'Ppc-Deo',
+  'ppc-deo': 'Ppc-Deo',
 
   // Maintenance
   'maintenance-metrical': 'Maintenance-Electrical',
-  'maintenance welder': 'Maintenance-Mechanical',
-  'maintenance-welder': 'Maintenance-Mechanical',
+  'maintenance welder': 'Maintenance-Welder',
+  'maintenance-welder': 'Maintenance-Welder',
 
   // Printing
-  'printing cylinder': 'Printing-Cylinder',
-  'printing-cylinder': 'Printing-Cylinder',
+  'printing cylinder': 'Printing-cylinder',
+  'printing-cylinder': 'Printing-cylinder',
 
-  'printing 01': 'Printing-01',
-  'printing-1': 'Printing-01',
+  'printing 01': 'Printing -01',
+  'printing-1': 'Printing -01',
+  'printing-01': 'Printing -01',
 
-  'printing 02': 'Printing-02',
-  'printing-2': 'Printing-02',
+  'printing 02': 'Printing -02',
+  'printing-2': 'Printing -02',
+  'printing-02': 'Printing -02',
 
-  'printing incharge': 'Printing-Incharge',
-  'printing-incharge': 'Printing-Incharge',
-  'printing-incahrge': 'Printing-Incharge',
+  'printing incharge': 'Printing-Incahrge',
+  'printing-incharge': 'Printing-Incahrge',
+  'printing-incahrge': 'Printing-Incahrge',
 
   'printing ink': 'Printing-Ink',
   'printing-ink': 'Printing-Ink',
+  'printing -ink': 'Printing-Ink',
 
   // Lamination
-  'lamination solvent less': 'Lamination - SEW NW HSS',
-  'lamination - solvent less': 'Lamination - SEW NW HSS',
+  'lamination solvent less': 'Lamination - SOLVENT LESS',
+  'lamination - solvent less': 'Lamination - SOLVENT LESS',
+  'lamination - sew nw hss': 'Lamination - SOLVENT LESS',
 
-  'lamination solvent base': 'Lamination - SEW NW BASF',
-  'lamination - solvent base': 'Lamination - SEW NW BASF',
+  'lamination solvent base': 'Lamination - SOLVENT BASE',
+  'lamination - solvent base': 'Lamination - SOLVENT BASE',
+  'lamination - sew nw basf': 'Lamination - SOLVENT BASE',
 
-  'lamination narendra': 'Lamination',
-  'lamination-narendra': 'Lamination',
-  'lamination - narendra': 'Lamination',
+  'lamination narendra': 'Lamination- NARENDRA',
+  'lamination-narendra': 'Lamination- NARENDRA',
+  'lamination - narendra': 'Lamination- NARENDRA',
+
+  // Quality
+  inspection: 'Inspection',
 
   // Forklift
-  forlift: 'Forklift',
+  forlift: 'Forlift',
   fomfit: 'Forklift',
 
   // Blown Film
-  'blown film unit 4': 'Blown Film Unit-4',
-  'blown-film unit-4': 'Blown Film Unit-4',
-  'blown film-unit-4': 'Blown Film Unit-4',
-  'blown film - unit - 4': 'Blown Film Unit-4',
-  'blown-film-unit-4': 'Blown Film Unit-4',
+  'blown film unit 4': 'Blown -Film Unit -4',
+  'blown-film unit-4': 'Blown -Film Unit -4',
+  'blown film-unit-4': 'Blown -Film Unit -4',
+  'blown film - unit - 4': 'Blown -Film Unit -4',
+  'blown-film-unit-4': 'Blown -Film Unit -4',
+  'blown film unit-4': 'Blown -Film Unit -4',
+
+  // Case variants
+  driver: 'DRIVER',
+  warehouse: 'WAREHOUSE',
 });
 
 const normalizedDepartmentAliasLookup = new Map(
@@ -151,6 +177,9 @@ const normalizedDepartmentAliasLookup = new Map(
 export const normalizeDepartmentName = (value) => {
   const name = typeof value === 'string' ? value.trim() : '';
   if (!name) return '';
+
+  // Exact match first — preserves case-distinct names (e.g. PPC vs Ppc)
+  if (DEPARTMENT_NAMES.includes(name)) return name;
 
   const key = normalizeDepartmentKey(name);
 

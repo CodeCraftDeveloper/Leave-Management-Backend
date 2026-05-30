@@ -18,7 +18,7 @@ const departmentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-departmentSchema.index({ name: 1 }, { unique: true, collation: { locale: 'en', strength: 2 } });
+departmentSchema.index({ name: 1 }, { unique: true, collation: { locale: 'en', strength: 5 } });
 
 const Department = mongoose.model('Department', departmentSchema);
 export default Department;
