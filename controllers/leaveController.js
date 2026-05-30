@@ -8,6 +8,7 @@ import { onApprovedLeaveCancelled } from '../services/leaveLifecycleService.js';
 import { resolveApprover, listDepartmentHeads } from '../utils/approverResolver.js';
 import { isBeforeTodayIST } from '../utils/dateHelpers.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
+import { resolveHeadScope, scopeAllowsDepartment } from '../utils/headScope.js';
 
 // @desc Apply leave
 // @route POST /api/leaves
@@ -192,10 +193,15 @@ export const getLeaveById = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Leave not found');
   }
-  // Visibility: heads see everything; dept_heads see anything in their dept
-  // (including their own); employees see only their own.
+  // Visibility: super admin sees everything; a scoped head sees their mapped
+  // department(s); dept_heads see anything in their dept (including their own);
+  // employees see only their own.
   const isOwner = leave.employee._id.toString() === req.user._id.toString();
-  const isHead = req.user.role === 'head';
+  let isHead = false;
+  if (req.user.role === 'head') {
+    const scope = await resolveHeadScope(req.user);
+    isHead = scopeAllowsDepartment(scope, leave.employee.department);
+  }
   const isDeptHeadOfApplicant =
     req.user.role === 'dept_head' && leave.employee.department === req.user.department;
   if (!isOwner && !isHead && !isDeptHeadOfApplicant) {
@@ -269,10 +275,12 @@ export const getMySummary = asyncHandler(async (req, res) => {
 export const getCalendarLeaves = asyncHandler(async (req, res) => {
   const { from, to, all } = req.query;
   const filter = { status: 'approved' };
-  // Scope: head with ?all=1 sees everyone; dept_head with ?all=1 sees their
-  // department; everyone else sees only their own.
+  // Scope: super admin with ?all=1 sees everyone; a scoped head sees their
+  // mapped department(s); dept_head with ?all=1 sees their department; everyone
+  // else sees only their own.
   if (all && req.user.role === 'head') {
-    // no employee filter
+    const scope = await resolveHeadScope(req.user);
+    if (!scope.isSuper) filter.employee = { $in: scope.employeeIds };
   } else if (all && req.user.role === 'dept_head') {
     const Employee = (await import('../models/Employee.js')).default;
     const dept = await Employee.find({ department: req.user.department, active: true }).select('_id');

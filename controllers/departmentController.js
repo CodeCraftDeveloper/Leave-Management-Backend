@@ -5,6 +5,7 @@ import {
   syncEmployeeRoles,
   renameDepartmentMembers,
 } from '../services/departmentSyncService.js';
+import { isSuperAdmin } from '../utils/headScope.js';
 
 const normalizeName = (value) => (typeof value === 'string' ? value.trim() : '');
 const normalizeCode = (value) => (typeof value === 'string' ? value.trim().toUpperCase() : '');
@@ -29,6 +30,11 @@ const decorateWithCounts = async (departments) => {
 export const listDepartments = asyncHandler(async (req, res) => {
   const { includeInactive } = req.query;
   const filter = includeInactive === 'true' ? {} : { active: true };
+  // A scoped head only sees the department(s) they are mapped to; the super
+  // admin sees them all.
+  if (!isSuperAdmin(req.user)) {
+    filter.heads = req.user._id;
+  }
   const departments = await Department.find(filter)
     .sort({ name: 1 })
     .populate('heads', 'name employeeId email role department active');

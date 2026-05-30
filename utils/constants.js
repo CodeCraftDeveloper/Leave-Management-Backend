@@ -10,6 +10,13 @@ export const ROLES = Object.freeze({
 // Roles that can review/approve leave requests of others.
 export const REVIEWER_ROLES = Object.freeze(['dept_head', 'head']);
 
+// The single overall super admin. Every other `head` is scoped to the
+// department(s) they are mapped to via Department.heads; only this account
+// has full, org-wide visibility and the global management powers (department
+// CRUD, weekly digest, dept_head role assignment). Identified by the reserved
+// login/notification email so no DB migration is needed.
+export const SUPERADMIN_EMAIL = 'charan.f.sde@gmail.com';
+
 export const EMPLOYEE_STATUS = Object.freeze({
   ACTIVE: 'ACTIVE',
   INACTIVE: 'INACTIVE',

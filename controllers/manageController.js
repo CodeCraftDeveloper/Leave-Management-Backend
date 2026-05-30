@@ -12,6 +12,7 @@ import {
 import { onLeaveApproved, onApprovedLeaveCancelled } from '../services/leaveLifecycleService.js';
 import { getApprovedLeavesForWeek, sendWeeklyHeadDigest } from '../services/weeklyDigestService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
+import { isSuperAdmin, resolveHeadScope, scopeAllowsDepartment } from '../utils/headScope.js';
 
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 
@@ -20,12 +21,15 @@ const headRoutingEmailsForLeave = (leave) => [
 ];
 
 // Build the Mongo filter for leave rows that `req.user` is allowed to review.
-// dept_head: leaves where they are the assigned approver. We also include
-// fallback by department in case an old leave has no approver stamped.
-// head:      full organisation visibility.
+// dept_head:   leaves where they are the assigned approver. We also include
+//              fallback by department in case an old leave has no approver stamped.
+// head:        the department(s) they are mapped to via Department.heads.
+// super admin: full organisation visibility.
 const scopedLeaveFilter = async (user) => {
   if (user.role === 'head') {
-    return {};
+    const scope = await resolveHeadScope(user);
+    if (scope.isSuper) return {};
+    return { employee: { $in: scope.employeeIds } };
   }
   if (user.role === 'dept_head') {
     const sameDept = await Employee.find({
@@ -215,7 +219,15 @@ export const getTeam = asyncHandler(async (req, res) => {
   let filter;
   if (req.user.role === 'head') {
     filter = { active: true, role: { $in: ['employee', 'dept_head'] } };
-    if (department) filter.department = department;
+    // Scoped heads only see staff in their mapped department(s).
+    const scope = await resolveHeadScope(req.user);
+    if (!scope.isSuper) {
+      filter.department = department && scope.departmentNames.includes(department)
+        ? department
+        : { $in: scope.departmentNames };
+    } else if (department) {
+      filter.department = department;
+    }
   } else if (req.user.role === 'dept_head') {
     filter = { active: true, department: req.user.department };
     if (!includeSelf) filter._id = { $ne: req.user._id };
@@ -273,7 +285,13 @@ export const actionLeave = asyncHandler(async (req, res) => {
     throw new Error('Leave not found');
   }
 
-  const isHead = req.user.role === 'head';
+  // Heads action leaves within their department scope (super admin = any dept);
+  // dept_heads action their own department's employees only.
+  let isHead = false;
+  if (req.user.role === 'head') {
+    const scope = await resolveHeadScope(req.user);
+    isHead = scopeAllowsDepartment(scope, leave.employee?.department);
+  }
   const isDeptScoped =
     req.user.role === 'dept_head' &&
     leave.employee?.department === req.user.department &&
@@ -408,9 +426,9 @@ export const actionLeave = asyncHandler(async (req, res) => {
 // @desc Head-only role assignment: employee <-> dept_head
 // @route PATCH /api/manage/employees/:id/role
 export const updateEmployeeRole = asyncHandler(async (req, res) => {
-  if (req.user.role !== 'head') {
+  if (!isSuperAdmin(req.user)) {
     res.status(403);
-    throw new Error('Only heads can manage department-head assignments');
+    throw new Error('Only the super admin can manage department-head assignments');
   }
 
   const { role } = req.body;
@@ -448,9 +466,9 @@ export const updateEmployeeRole = asyncHandler(async (req, res) => {
 // @desc Preview the approved leaves in the current weekly digest window
 // @route GET /api/manage/weekly-digest
 export const getWeeklyDigestPreview = asyncHandler(async (req, res) => {
-  if (req.user.role !== 'head') {
+  if (!isSuperAdmin(req.user)) {
     res.status(403);
-    throw new Error('Only heads can view the weekly digest');
+    throw new Error('Only the super admin can view the weekly digest');
   }
 
   const result = await getApprovedLeavesForWeek();
@@ -460,9 +478,9 @@ export const getWeeklyDigestPreview = asyncHandler(async (req, res) => {
 // @desc Manually send the weekly digest to heads for testing
 // @route POST /api/manage/weekly-digest/send
 export const sendWeeklyDigestNow = asyncHandler(async (req, res) => {
-  if (req.user.role !== 'head') {
+  if (!isSuperAdmin(req.user)) {
     res.status(403);
-    throw new Error('Only heads can send the weekly digest');
+    throw new Error('Only the super admin can send the weekly digest');
   }
 
   const result = await sendWeeklyHeadDigest();

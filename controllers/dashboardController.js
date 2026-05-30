@@ -5,6 +5,7 @@ import Leave from '../models/Leave.js';
 import Payroll from '../models/Payroll.js';
 import { getYearlyBalances } from '../services/leaveBalanceService.js';
 import { startOfDayIST, monthRange } from '../utils/dateHelpers.js';
+import { resolveHeadScope } from '../utils/headScope.js';
 
 // GET /api/dashboard/employee  (self)
 export const employeeDashboard = asyncHandler(async (req, res) => {
@@ -61,13 +62,19 @@ export const adminDashboard = asyncHandler(async (req, res) => {
   const month = now.getMonth() + 1;
   const year = now.getFullYear();
 
+  // Heads are department-scoped; the super admin sees the whole organisation.
+  const scope = await resolveHeadScope(req.user);
+  const headcountScope = scope.isSuper ? {} : { department: { $in: scope.departmentNames } };
+  const employeeScope = scope.isSuper ? {} : { employee: { $in: scope.employeeIds } };
+  const attendanceScope = scope.isSuper ? {} : { employee: { $in: scope.employeeIds } };
+
   const [totalEmployees, activeEmployees, todayRecords, pendingLeaves, payrollAgg] = await Promise.all([
-    Employee.countDocuments({ role: { $in: ['employee', 'hr'] } }),
-    Employee.countDocuments({ role: { $in: ['employee', 'hr'] }, active: true }),
-    Attendance.find({ date: today }),
-    Leave.countDocuments({ status: 'pending' }),
+    Employee.countDocuments({ role: { $in: ['employee', 'hr'] }, ...headcountScope }),
+    Employee.countDocuments({ role: { $in: ['employee', 'hr'] }, active: true, ...headcountScope }),
+    Attendance.find({ date: today, ...attendanceScope }),
+    Leave.countDocuments({ status: 'pending', ...employeeScope }),
     Payroll.aggregate([
-      { $match: { month, year } },
+      { $match: { month, year, ...employeeScope } },
       {
         $group: {
           _id: '$status',

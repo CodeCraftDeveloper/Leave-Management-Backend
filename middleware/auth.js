@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import asyncHandler from 'express-async-handler';
 import Employee from '../models/Employee.js';
+import { isSuperAdmin } from '../utils/headScope.js';
 
 export const protect = asyncHandler(async (req, res, next) => {
   let token;
@@ -38,6 +39,15 @@ export const authorize = (...allowed) => (req, res, next) => {
 // Only the top-of-org `head` role — full org visibility, manages dept_heads,
 // handles dept_head leave approvals and system-wide settings.
 export const headOnly = authorize('head');
+
+// The single overall super admin. Heads are department-scoped, so global powers
+// — department CRUD, weekly digest, dept_head role assignment — are reserved for
+// the super admin alone.
+export const superAdminOnly = asyncHandler(async (req, res, next) => {
+  if (req.user && isSuperAdmin(req.user)) return next();
+  res.status(403);
+  throw new Error('Only the super admin can perform this action');
+});
 
 // Any reviewer — used for the shared management surface (My Team, review queue).
 export const reviewerOnly = authorize('dept_head', 'head');

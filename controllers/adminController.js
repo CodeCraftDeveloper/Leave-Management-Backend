@@ -10,6 +10,16 @@ import { isBeforeTodayIST } from '../utils/dateHelpers.js';
 import { sendLeaveStatusEmail } from '../services/emailService.js';
 import { onLeaveApproved } from '../services/leaveLifecycleService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
+import { resolveHeadScope, intersectWithScope, scopeAllowsDepartment } from '../utils/headScope.js';
+
+// Guard: a scoped head may only act on employees inside their department(s).
+// The super admin (scope.isSuper) always passes.
+const assertDepartmentInScope = (scope, departmentName, res) => {
+  if (!scopeAllowsDepartment(scope, departmentName)) {
+    res.status(403);
+    throw new Error('This employee is outside your department scope');
+  }
+};
 
 const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
 
@@ -83,11 +93,16 @@ const rejectStaffingLimit = (res, staffingCoverage) => res.status(409).json({
 // @desc Admin dashboard stats
 // @route GET /api/admin/dashboard
 export const getDashboard = asyncHandler(async (req, res) => {
+  // Heads are department-scoped; the super admin sees the whole organisation.
+  const scope = await resolveHeadScope(req.user);
+  const employeeScope = scope.isSuper ? {} : { employee: { $in: scope.employeeIds } };
+  const headcountScope = scope.isSuper ? {} : { department: { $in: scope.departmentNames } };
+
   const [totalEmployees, pending, approved, rejected] = await Promise.all([
-    Employee.countDocuments({ role: { $in: ['employee', 'dept_head'] }, active: true }),
-    Leave.countDocuments({ status: 'pending' }),
-    Leave.countDocuments({ status: 'approved' }),
-    Leave.countDocuments({ status: 'rejected' }),
+    Employee.countDocuments({ role: { $in: ['employee', 'dept_head'] }, active: true, ...headcountScope }),
+    Leave.countDocuments({ status: 'pending', ...employeeScope }),
+    Leave.countDocuments({ status: 'approved', ...employeeScope }),
+    Leave.countDocuments({ status: 'rejected', ...employeeScope }),
   ]);
 
   // Monthly analytics for current year
@@ -96,6 +111,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
     {
       $match: {
         createdAt: { $gte: new Date(`${year}-01-01`), $lte: new Date(`${year}-12-31`) },
+        ...employeeScope,
       },
     },
     {
@@ -117,7 +133,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
     if (row && row[m._id.status] !== undefined) row[m._id.status] = m.count;
   });
 
-  const recent = await Leave.find()
+  const recent = await Leave.find(employeeScope)
     .sort({ createdAt: -1 })
     .limit(8)
     .populate('employee', 'name employeeId department');
@@ -137,6 +153,9 @@ export const getAllLeaves = asyncHandler(async (req, res) => {
   if (status) filter.status = status;
   if (type) filter.leaveType = type;
 
+  // Department scope for the calling head (super admin = unrestricted).
+  const scope = await resolveHeadScope(req.user);
+
   let employeeFilter = {};
   if (search) {
     employeeFilter = {
@@ -147,7 +166,9 @@ export const getAllLeaves = asyncHandler(async (req, res) => {
       ],
     };
     const employees = await Employee.find(employeeFilter).select('_id');
-    filter.employee = { $in: employees.map((e) => e._id) };
+    filter.employee = { $in: intersectWithScope(scope, employees.map((e) => e._id)) };
+  } else if (!scope.isSuper) {
+    filter.employee = { $in: scope.employeeIds };
   }
 
   const skip = (Number(page) - 1) * Number(limit);
@@ -176,6 +197,7 @@ export const exportLeaves = asyncHandler(async (req, res) => {
     if (endDate) filter.startDate.$lte = new Date(endDate);
   }
 
+  const scope = await resolveHeadScope(req.user);
   if (search) {
     const employees = await Employee.find({
       $or: [
@@ -184,7 +206,9 @@ export const exportLeaves = asyncHandler(async (req, res) => {
         { department: { $regex: search, $options: 'i' } },
       ],
     }).select('_id');
-    filter.employee = { $in: employees.map((e) => e._id) };
+    filter.employee = { $in: intersectWithScope(scope, employees.map((e) => e._id)) };
+  } else if (!scope.isSuper) {
+    filter.employee = { $in: scope.employeeIds };
   }
 
   const leaves = await Leave.find(filter)
@@ -280,6 +304,9 @@ export const updateLeaveStatus = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Leave not found');
   }
+  // Heads can only action leaves of employees in their department(s).
+  const scope = await resolveHeadScope(req.user);
+  assertDepartmentInScope(scope, leave.employee?.department, res);
   if (leave.status !== 'pending') {
     res.status(400);
     throw new Error(`Leave already ${leave.status}`);
@@ -341,7 +368,15 @@ export const updateLeaveStatus = asyncHandler(async (req, res) => {
 export const getEmployees = asyncHandler(async (req, res) => {
   const { search, department, page = 1, limit = 20 } = req.query;
   const filter = { role: { $in: ['employee', 'dept_head'] }, active: true };
-  if (department) filter.department = department;
+  // Heads only see employees in their mapped department(s).
+  const scope = await resolveHeadScope(req.user);
+  if (!scope.isSuper) {
+    filter.department = department && scope.departmentNames.includes(department)
+      ? department
+      : { $in: scope.departmentNames };
+  } else if (department) {
+    filter.department = department;
+  }
   if (search) {
     filter.$or = [
       { name: { $regex: search, $options: 'i' } },
@@ -367,6 +402,10 @@ export const createEmployee = asyncHandler(async (req, res) => {
     res.status(400);
     throw error;
   }
+
+  // A scoped head can only create employees inside their own department(s).
+  const scope = await resolveHeadScope(req.user);
+  assertDepartmentInScope(scope, input.department, res);
 
   try {
     await assertUniqueEmployeeIdentity(input);
@@ -400,6 +439,8 @@ export const getEmployeeDetail = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Employee not found');
   }
+  const scope = await resolveHeadScope(req.user);
+  assertDepartmentInScope(scope, employee.department, res);
   const leaves = await Leave.find({ employee: employee._id }).sort({ createdAt: -1 }).limit(50);
   res.json({ employee, leaves });
 });
@@ -429,6 +470,12 @@ export const updateEmployee = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Employee not found');
   }
+
+  // Scoped heads can only edit employees in their department(s), and cannot
+  // move them out to a department they don't manage.
+  const scope = await resolveHeadScope(req.user);
+  assertDepartmentInScope(scope, employee.department, res);
+  assertDepartmentInScope(scope, input.department, res);
 
   try {
     await assertUniqueEmployeeIdentity(input, employee._id);
@@ -472,6 +519,9 @@ export const deleteEmployee = asyncHandler(async (req, res) => {
     throw new Error('Employee not found');
   }
 
+  const scope = await resolveHeadScope(req.user);
+  assertDepartmentInScope(scope, employee.department, res);
+
   employee.active = false;
   await employee.save();
 
@@ -500,6 +550,11 @@ export const updateEmployeeWorkDetails = asyncHandler(async (req, res) => {
     throw new Error('Employee not found');
   }
 
+  // Scoped heads can only move employees between departments they manage.
+  const scope = await resolveHeadScope(req.user);
+  assertDepartmentInScope(scope, employee.department, res);
+  assertDepartmentInScope(scope, trimmedDepartment, res);
+
   employee.department = trimmedDepartment;
   employee.designation = trimmedDesignation;
   await employee.save();
@@ -522,6 +577,10 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Employee not found');
   }
+
+  // Scoped heads can only log leave for employees in their department(s).
+  const scope = await resolveHeadScope(req.user);
+  assertDepartmentInScope(scope, employee.department, res);
 
   const isHalfDayBool = String(isHalfDay) === 'true';
 

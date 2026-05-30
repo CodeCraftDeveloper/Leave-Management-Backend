@@ -82,6 +82,11 @@ export const buildMonthlySummary = async (employee, month, year) => {
 
     const leave = leaveDayMap.get(dStr);
 
+    if (att && att.status === 'HALF_DAY') {
+      // Half day worked → counts as half a present day (earns half pay).
+      presentDays += 0.5;
+      continue;
+    }
     if (att && att.checkIn) {
       // Real attendance always wins over a leave stamp.
       presentDays += 1;
@@ -161,6 +166,42 @@ export const computePayroll = async (employee, month, year, opts = {}) => {
   };
 };
 
+/**
+ * Live earnings tracker for the employee salary screen.
+ * Earnings are driven by ACTUAL attendance, based on BASIC salary:
+ *   perDay          = basicSalary / totalDaysInMonth
+ *   currentEarnings = presentDays   * perDay   (full present days only;
+ *                                               leaves & absents are not paid)
+ *   sundayEarnings  = sundaysWorked * perDay   (shown in its own box; not
+ *                                               part of basic/current earnings)
+ * Pure read — no DB writes.
+ */
+export const computeLiveEarnings = async (employee, month, year) => {
+  const structure = await SalaryStructure.findOne({ employee: employee._id });
+  const basicSalary = Number(structure?.basicSalary ?? 0);
+  const summary = await buildMonthlySummary(employee, month, year);
+
+  const perDaySalary = r2(
+    summary.totalDaysInMonth > 0 ? basicSalary / summary.totalDaysInMonth : 0
+  );
+  const currentEarnings = r2(summary.presentDays * perDaySalary);
+  const sundayEarnings = r2(summary.sundaysWorked * perDaySalary);
+
+  return {
+    month,
+    year,
+    basicSalary: r2(basicSalary),
+    totalDaysInMonth: summary.totalDaysInMonth,
+    presentDays: summary.presentDays,
+    absentDays: summary.absentDays,
+    leavesTaken: summary.leavesTaken,
+    sundaysWorked: summary.sundaysWorked,
+    perDaySalary,
+    currentEarnings,
+    sundayEarnings,
+  };
+};
+
 export const generatePayrollForEmployee = async (employeeId, month, year, opts = {}, actorId) => {
   const employee = await Employee.findById(employeeId);
   if (!employee) throw Object.assign(new Error('Employee not found'), { statusCode: 404 });
@@ -193,6 +234,7 @@ export const generatePayrollForEmployee = async (employeeId, month, year, opts =
 /** Printable payslip view from a Payroll row. */
 export const buildPayslip = async (payroll) => {
   await payroll.populate('employee', 'employeeId name email department designation joiningDate');
+  const structure = await SalaryStructure.findOne({ employee: payroll.employee._id });
   return {
     employee: payroll.employee,
     period: { month: payroll.month, year: payroll.year },
@@ -217,6 +259,23 @@ export const buildPayslip = async (payroll) => {
       totalPayable: payroll.totalPayable ?? r2((payroll.netSalary || 0) + (payroll.otSalary ?? payroll.sundayBonus ?? 0)),
       netSalary: payroll.netSalary,
     },
+    // CTC-style salary structure breakdown for the payslip line-items.
+    // `grossSalary` mirrors monthlySalary (the payroll base) for clarity.
+    structure: structure
+      ? {
+          grossSalary: structure.monthlySalary,
+          basicSalary: structure.basicSalary,
+          other: structure.other,
+          bonus: structure.bonus,
+          gratuity: structure.gratuity,
+          employerPf: structure.employerPf,
+          employerEsic: structure.employerEsic,
+          ctc: structure.ctc,
+          deduction: structure.deduction,
+          employeePf: structure.employeePf,
+          employeeEsic: structure.employeeEsic,
+        }
+      : null,
     status: payroll.status,
     paidAt: payroll.paidAt,
     generatedAt: payroll.createdAt,

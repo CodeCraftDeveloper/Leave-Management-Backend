@@ -5,6 +5,7 @@ import Employee from '../models/Employee.js';
 import {
   generatePayrollForEmployee,
   computePayroll,
+  computeLiveEarnings,
   buildPayslip,
 } from '../services/payrollService.js';
 
@@ -32,6 +33,24 @@ export const previewPayroll = asyncHandler(async (req, res) => {
   }
   const data = await computePayroll(employee, month, year);
   res.json({ employeeId, month, year, ...data });
+});
+
+// Live attendance-based earnings (basic salary) for the current month.
+// GET /api/payroll/live-earnings?employeeId=&month=&year=  (self unless admin/hr)
+export const getLiveEarnings = asyncHandler(async (req, res) => {
+  const { month, year } = parseMonthYear(req.query);
+  const employeeId = req.query.employeeId || req.user._id;
+  if (!['head', 'hr'].includes(req.user.role) && String(employeeId) !== String(req.user._id)) {
+    res.status(403);
+    throw new Error('Not authorized');
+  }
+  const employee = await Employee.findById(employeeId);
+  if (!employee) {
+    res.status(404);
+    throw new Error('Employee not found');
+  }
+  const data = await computeLiveEarnings(employee, month, year);
+  res.json({ employeeId, ...data });
 });
 
 // Generate (or regenerate) a single employee's payroll for a month.

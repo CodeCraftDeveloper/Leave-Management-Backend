@@ -26,7 +26,7 @@ export const upsertStructure = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Employee not found');
   }
-  const numeric = ['monthlySalary', 'basicSalary', 'hra', 'conveyanceAllowance', 'medicalAllowance', 'specialAllowance', 'pfAmount', 'professionalTax', 'tds', 'otherDeductions'];
+  const numeric = ['monthlySalary', 'basicSalary', 'other', 'bonus', 'gratuity', 'employerPf', 'employerEsic', 'ctc', 'deduction', 'employeePf', 'employeeEsic'];
   const update = {};
   for (const f of numeric) {
     if (req.body[f] !== undefined) {
@@ -38,7 +38,6 @@ export const upsertStructure = asyncHandler(async (req, res) => {
       update[f] = v;
     }
   }
-  if (req.body.pfEnabled !== undefined) update.pfEnabled = !!req.body.pfEnabled;
   if (req.body.effectiveFrom) update.effectiveFrom = new Date(req.body.effectiveFrom);
   update.updatedBy = req.user._id;
 

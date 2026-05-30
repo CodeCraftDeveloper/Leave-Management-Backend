@@ -6,7 +6,9 @@ import ExcelJS from 'exceljs';
 import mongoose from 'mongoose';
 import connectDB from './config/db.js';
 import Employee from './models/Employee.js';
+import Department from './models/Department.js';
 import Leave from './models/Leave.js';
+import Attendance from './models/Attendance.js';
 import Notification from './models/Notification.js';
 import Holiday from './models/Holiday.js';
 
@@ -37,6 +39,7 @@ const DEFAULT_HEAD_EMAILS = [
   'hp.singh@premindustries.in',
   'saurabh@premindustries.in',
   'raghav.goel@premindustries.in',
+  'ishita.goel@premindustries.in',
   'satendra.katiyar@premindustries.in',
   'sp.singh@premindustries.in',
   'production.premindustries@gmail.com',
@@ -49,6 +52,7 @@ const HEAD_EMAILS = Object.freeze({
   hp: 'hp.singh@premindustries.in',
   saurabh: 'saurabh@premindustries.in',
   raghav: 'raghav.goel@premindustries.in',
+  ishita: 'ishita.goel@premindustries.in',
   satendra: 'satendra.katiyar@premindustries.in',
   sp: 'sp.singh@premindustries.in',
   production: 'production.premindustries@gmail.com',
@@ -337,7 +341,7 @@ const inferredHeadEmailsForDepartment = (department = '') => {
   const dept = normalizeCell(department).toLowerCase();
 
   if (!dept) return [HEAD_EMAILS.rajan];
-  if (dept.includes('digital market')) return [HEAD_EMAILS.rajan, HEAD_EMAILS.raghav];
+  if (dept.includes('digital market')) return [HEAD_EMAILS.rajan, HEAD_EMAILS.raghav, HEAD_EMAILS.ishita];
   if (
     dept.includes('hr') ||
     dept.includes('admin') ||
@@ -482,6 +486,131 @@ const buildHeadSeeds = (roster) => {
   }));
 };
 
+const departmentCodeFromName = (name) =>
+  normalizeCell(name)
+    .toUpperCase()
+    .replace(/&/g, ' AND ')
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 24);
+
+const buildDepartmentGroups = (roster, headByEmail) => {
+  const groups = new Map();
+
+  for (const entry of roster) {
+    const name = normalizeCell(entry.department) || 'General';
+    if (!groups.has(name)) {
+      groups.set(name, {
+        name,
+        code: departmentCodeFromName(name),
+        headIds: new Set(),
+        headEmails: new Set(),
+        memberCount: 0,
+      });
+    }
+
+    const group = groups.get(name);
+    group.memberCount += 1;
+    for (const email of headEmailsForEntry(entry)) {
+      const normalized = normalizeEmail(email);
+      const head = headByEmail.get(normalized);
+      if (!head) continue;
+      group.headIds.add(String(head._id));
+      group.headEmails.add(normalized);
+    }
+  }
+
+  return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+};
+
+const utcDay = (year, month, day, hour = 0, minute = 0) =>
+  new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0));
+
+const istTime = (year, month, day, hour, minute) =>
+  new Date(Date.UTC(year, month - 1, day, hour - 5, minute - 30, 0, 0));
+
+const seedH666MayRecords = async ({ employeeById, actor, year }) => {
+  const employee = employeeById.get('H666');
+  if (!employee) {
+    throw new Error('Cannot seed H666 May records because employee H666 was not created.');
+  }
+
+  const approver = employeeById.get('H641') || actor;
+  const fullLeaveDays = new Set([12, 13, 14, 15, 16]);
+  const halfLeaveSessions = new Map([
+    [5, 'first_half'],
+    [18, 'first_half'],
+    [29, 'second_half'],
+  ]);
+  const halfLeaveDays = new Set(halfLeaveSessions.keys());
+  const attendanceDocs = [];
+  const month = 5;
+  const seedAttendanceThroughDay = 29;
+
+  await Leave.create([
+    {
+      employee: employee._id,
+      approver: approver?._id,
+      leaveType: 'leave',
+      startDate: utcDay(year, month, 12),
+      endDate: utcDay(year, month, 16),
+      totalDays: 5,
+      reason: 'Seeded full-day leave for May 12 to May 16.',
+      status: 'approved',
+      adminComment: 'Seeded approved leave.',
+      actionedBy: approver?._id,
+      actionedAt: new Date(),
+    },
+    ...[...halfLeaveSessions].map(([day, halfDaySession]) => ({
+      employee: employee._id,
+      approver: approver?._id,
+      leaveType: 'leave',
+      startDate: utcDay(year, month, day),
+      endDate: utcDay(year, month, day),
+      totalDays: 0.5,
+      reason: `Seeded half-day leave for May ${day}.`,
+      status: 'approved',
+      adminComment: 'Seeded approved half-day leave.',
+      actionedBy: approver?._id,
+      actionedAt: new Date(),
+      isHalfDay: true,
+      halfDaySession,
+    })),
+  ]);
+
+  for (let day = 1; day <= seedAttendanceThroughDay; day += 1) {
+    if (fullLeaveDays.has(day)) continue;
+
+    attendanceDocs.push({
+      employee: employee._id,
+      date: utcDay(year, month, day),
+      checkIn: {
+        time: istTime(year, month, day, 9, 15),
+        latitude: 0,
+        longitude: 0,
+      },
+      checkOut: {
+        time: istTime(year, month, day, 18, 30),
+        latitude: 0,
+        longitude: 0,
+      },
+      totalHours: 9.25,
+      workHours: 9.25,
+      overtimeHours: 0,
+      lateMinutes: 0,
+      status: 'PRESENT',
+      remarks: halfLeaveDays.has(day)
+        ? 'Seeded present attendance with approved half-day leave'
+        : 'Seeded present attendance',
+      createdBy: approver?._id,
+      updatedBy: approver?._id,
+    });
+  }
+
+  await Attendance.insertMany(attendanceDocs);
+  console.log(`Seeded H666 May ${year}: 5 full leave day(s), ${halfLeaveSessions.size} half leave day(s), ${attendanceDocs.length} present attendance day(s).`);
+};
+
 const run = async () => {
   const roster = await resolveRoster();
   assertUniqueEmployeeIds(roster);
@@ -502,7 +631,9 @@ const run = async () => {
   console.log('Clearing existing data...');
   await Promise.all([
     Employee.deleteMany(),
+    Department.deleteMany(),
     Leave.deleteMany(),
+    Attendance.deleteMany(),
     Notification.deleteMany(),
     Holiday.deleteMany(),
   ]);
@@ -527,15 +658,40 @@ const run = async () => {
   ]);
 
   console.log('Seeding heads...');
+  const headByEmail = new Map();
+  const headCredentials = [];
   for (const h of heads) {
     const { sourceEmail, ...headDoc } = h;
     // Only the primary admin email is reserved in Employee.email. The other
     // head-source emails stay free so the actual employee can register and OTP
     // verify that address on their own profile later.
-    await Employee.create({ ...headDoc, role: 'head', emailVerified: Boolean(headDoc.email) });
+    const created = await Employee.create({
+      ...headDoc,
+      role: 'head',
+      emailVerified: Boolean(headDoc.email),
+    });
+    headByEmail.set(sourceEmail, created);
+    headCredentials.push({
+      email: sourceEmail,
+      employeeId: created.employeeId,
+      password: h.password,
+    });
+  }
+
+  console.log('Seeding department head groups...');
+  const departmentGroups = buildDepartmentGroups(roster, headByEmail);
+  for (const group of departmentGroups) {
+    await Department.create({
+      name: group.name,
+      code: group.code,
+      description: `Seeded from employee roster. Head group: ${[...group.headEmails].join(', ') || 'none'}.`,
+      heads: [...group.headIds],
+      active: true,
+    });
   }
 
   console.log(`Seeding ${roster.length} employees...`);
+  const employeeById = new Map();
   for (const entry of roster) {
     const isDepartmentHead = departmentHeadIds.has(entry.employeeId);
     const explicitRole = normalizeCell(entry.role);
@@ -563,12 +719,24 @@ const run = async () => {
       // via OTP after setting their email through the portal.
       doc.emailVerified = Boolean(knownEmails[entry.employeeId]) || Boolean(entry.emailVerified);
     }
-    await Employee.create(doc);
+    const created = await Employee.create(doc);
+    employeeById.set(created.employeeId, created);
   }
+
+  await seedH666MayRecords({
+    employeeById,
+    actor: headByEmail.get(HEAD_EMAILS.primary),
+    year: currentYear,
+  });
 
   console.log('\nSeed complete');
   console.log(`Head (primary) -> charan.f.sde@gmail.com / admin123`);
   console.log(`Seeded ${heads.length} head account(s); non-primary heads use HEAD### / ${TEMP_PASSWORD}`);
+  console.log('Temporary head credentials:');
+  for (const credential of headCredentials) {
+    console.log(`  ${credential.email} -> ${credential.employeeId} / ${credential.password}`);
+  }
+  console.log(`Seeded ${departmentGroups.length} department group(s) with mapped heads.`);
   console.log(`Department Head -> H641 / ${TEMP_PASSWORD} (Shikhar Tripathi, Digital Market)`);
   console.log(`Employees -> <CardNo> / ${TEMP_PASSWORD} (e.g. H1 / ${TEMP_PASSWORD})`);
   await mongoose.disconnect();

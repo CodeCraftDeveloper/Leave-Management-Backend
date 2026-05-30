@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import Employee from '../models/Employee.js';
 import generateToken from '../utils/generateToken.js';
 import { sendVerificationCodeEmail } from '../services/emailService.js';
+import { isSuperAdmin } from '../utils/headScope.js';
 
 const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
 const OTP_TTL_MINUTES = 15;
@@ -19,6 +20,10 @@ const sanitize = (u) => ({
   department: u.department,
   designation: u.designation,
   role: u.role,
+  // Only the reserved super-admin head has org-wide visibility; every other
+  // head is scoped to their mapped department(s). The client/mobile apps use
+  // this to gate super-admin-only controls.
+  isSuperAdmin: isSuperAdmin(u),
   leaveBalance: u.leaveBalance,
   profileImage: u.profileImage,
   joiningDate: u.joiningDate,
