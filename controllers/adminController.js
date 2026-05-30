@@ -2,6 +2,7 @@ import asyncHandler from 'express-async-handler';
 import ExcelJS from 'exceljs';
 import Leave from '../models/Leave.js';
 import Employee from '../models/Employee.js';
+import Department from '../models/Department.js';
 import Notification from '../models/Notification.js';
 import Holiday from '../models/Holiday.js';
 import { calculateDays, datesOverlap } from '../utils/calculateDays.js';
@@ -12,6 +13,9 @@ import { onLeaveApproved } from '../services/leaveLifecycleService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
 import { resolveHeadScope, intersectWithScope, scopeAllowsDepartment } from '../utils/headScope.js';
 import { normalizeDepartmentName } from '../utils/constants.js';
+
+const STAFF_ROLES = ['employee', 'dept_head'];
+const SUPER_ADMIN_MANAGED_ROLES = ['employee', 'dept_head', 'head'];
 
 // Guard: a scoped head may only act on employees inside their department(s).
 // The super admin (scope.isSuper) always passes.
@@ -33,9 +37,10 @@ const normalizeEmployeeInput = (payload, { requirePassword = false } = {}) => {
   const designation = typeof payload.designation === 'string' ? payload.designation.trim() : '';
   const password = typeof payload.password === 'string' ? payload.password : '';
   const joiningDate = payload.joiningDate ? new Date(payload.joiningDate) : undefined;
+  const role = typeof payload.role === 'string' ? payload.role.trim() : '';
 
-  if (!employeeId || !name || !email || !department || !designation) {
-    throw new Error('Employee ID, name, email, department and designation are required');
+  if (!employeeId || !name || !department || !designation) {
+    throw new Error('Employee ID, name, department and designation are required');
   }
   if (email && !EMAIL_PATTERN.test(email)) {
     throw new Error('A valid email is required');
@@ -56,6 +61,7 @@ const normalizeEmployeeInput = (payload, { requirePassword = false } = {}) => {
     designation,
     password,
     joiningDate,
+    role: SUPER_ADMIN_MANAGED_ROLES.includes(role) ? role : undefined,
   };
 };
 
@@ -371,10 +377,13 @@ export const updateLeaveStatus = asyncHandler(async (req, res) => {
 // @desc Get all employees
 // @route GET /api/admin/employees
 export const getEmployees = asyncHandler(async (req, res) => {
-  const { search, department, page = 1, limit = 20 } = req.query;
-  const filter = { role: { $in: ['employee', 'dept_head'] }, active: true };
+  const { search, department, includeHeads, page = 1, limit = 20 } = req.query;
   // Heads only see employees in their mapped department(s).
   const scope = await resolveHeadScope(req.user);
+  const roles = scope.isSuper && String(includeHeads) === 'true'
+    ? SUPER_ADMIN_MANAGED_ROLES
+    : STAFF_ROLES;
+  const filter = { role: { $in: roles }, active: true };
   if (!scope.isSuper) {
     filter.department = department && scope.departmentNames.includes(department)
       ? department
@@ -410,6 +419,11 @@ export const createEmployee = asyncHandler(async (req, res) => {
 
   // A scoped head can only create employees inside their own department(s).
   const scope = await resolveHeadScope(req.user);
+  const nextRole = input.role || 'employee';
+  if (nextRole === 'head' && !scope.isSuper) {
+    res.status(403);
+    throw new Error('Only the super admin can create Head accounts');
+  }
   assertDepartmentInScope(scope, input.department, res);
 
   try {
@@ -423,7 +437,7 @@ export const createEmployee = asyncHandler(async (req, res) => {
   try {
     created = await Employee.create({
       ...input,
-      role: 'employee',
+      role: nextRole,
     });
   } catch (error) {
     throwEmployeeSaveError(error, res);
@@ -466,19 +480,29 @@ export const updateEmployee = asyncHandler(async (req, res) => {
     throw error;
   }
 
+  const scope = await resolveHeadScope(req.user);
+  if (input.role === 'head' && !scope.isSuper) {
+    res.status(403);
+    throw new Error('Only the super admin can create or edit Head accounts');
+  }
+
+  const managedRoles = scope.isSuper ? SUPER_ADMIN_MANAGED_ROLES : STAFF_ROLES;
   const employee = await Employee.findOne({
     _id: req.params.id,
-    role: { $in: ['employee', 'dept_head'] },
+    role: { $in: managedRoles },
     active: true,
   });
   if (!employee) {
     res.status(404);
     throw new Error('Employee not found');
   }
+  if (input.role && String(employee._id) === String(req.user._id) && input.role !== employee.role) {
+    res.status(400);
+    throw new Error('You cannot change your own role from this screen');
+  }
 
   // Scoped heads can only edit employees in their department(s), and cannot
   // move them out to a department they don't manage.
-  const scope = await resolveHeadScope(req.user);
   assertDepartmentInScope(scope, employee.department, res);
   assertDepartmentInScope(scope, input.department, res);
 
@@ -489,6 +513,8 @@ export const updateEmployee = asyncHandler(async (req, res) => {
     throw error;
   }
 
+  const previousRole = employee.role;
+  const previousDepartment = employee.department;
   employee.employeeId = input.employeeId;
   employee.name = input.name;
   if (employee.email !== input.email) {
@@ -501,11 +527,24 @@ export const updateEmployee = asyncHandler(async (req, res) => {
   employee.phone = input.phone;
   employee.department = input.department;
   employee.designation = input.designation;
+  employee.role = scope.isSuper && input.role ? input.role : employee.role;
   if (input.joiningDate) employee.joiningDate = input.joiningDate;
   try {
     await employee.save();
   } catch (error) {
     throwEmployeeSaveError(error, res);
+  }
+
+  if (employee.role === 'dept_head') {
+    if (previousDepartment !== employee.department || previousRole !== 'dept_head') {
+      await Department.updateMany({ heads: employee._id }, { $pull: { heads: employee._id } });
+      await Department.updateOne(
+        { name: employee.department, active: true },
+        { $addToSet: { heads: employee._id } }
+      );
+    }
+  } else if (previousRole === 'dept_head' || (previousRole === 'head' && employee.role !== 'head')) {
+    await Department.updateMany({ heads: employee._id }, { $pull: { heads: employee._id } });
   }
 
   res.json(await Employee.findById(employee._id));
@@ -514,21 +553,27 @@ export const updateEmployee = asyncHandler(async (req, res) => {
 // @desc Deactivate employee while preserving leave history
 // @route DELETE /api/admin/employees/:id
 export const deleteEmployee = asyncHandler(async (req, res) => {
+  const scope = await resolveHeadScope(req.user);
+  const managedRoles = scope.isSuper ? SUPER_ADMIN_MANAGED_ROLES : STAFF_ROLES;
   const employee = await Employee.findOne({
     _id: req.params.id,
-    role: { $in: ['employee', 'dept_head'] },
+    role: { $in: managedRoles },
     active: true,
   });
   if (!employee) {
     res.status(404);
     throw new Error('Employee not found');
   }
+  if (String(employee._id) === String(req.user._id)) {
+    res.status(400);
+    throw new Error('You cannot remove your own account from this screen');
+  }
 
-  const scope = await resolveHeadScope(req.user);
   assertDepartmentInScope(scope, employee.department, res);
 
   employee.active = false;
   await employee.save();
+  await Department.updateMany({ heads: employee._id }, { $pull: { heads: employee._id } });
 
   res.json({ message: 'Employee deleted successfully' });
 });

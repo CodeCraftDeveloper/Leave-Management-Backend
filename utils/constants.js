@@ -53,8 +53,15 @@ export const DEPARTMENT_NAMES = Object.freeze([
   'Blown Film Unit-4',
 ]);
 
+const normalizeDepartmentKey = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/\s*-\s*/g, '-');
+
 const normalizedDepartmentLookup = new Map(
-  DEPARTMENT_NAMES.map((name) => [name.toLowerCase(), name])
+  DEPARTMENT_NAMES.map((name) => [normalizeDepartmentKey(name), name])
 );
 
 const DEPARTMENT_ALIASES = Object.freeze({
@@ -66,23 +73,32 @@ const DEPARTMENT_ALIASES = Object.freeze({
   'supervisor ink': 'Supervisor (Ink)',
   'ppc-deo': 'Pig-Dino',
   'maintenance-metrical': 'Maintenance-Electrical',
+  'maintenance-welder': 'Maintenance-Mechanical',
   inspection: 'Boiler',
   'printing-02': 'Printing-17',
   'printing ink': 'Printing-Ink',
   'printing incharge': 'Printing-Slitting',
+  'printing-incharge': 'Printing-Slitting',
   'lamination - solvent less': 'Lamination - SEW NW HSS',
   'lamination - solvent base': 'Lamination - SEW NW BASF',
   'lamination - narenda': 'Lamination',
+  'lamination-narendra': 'Lamination',
+  forlift: 'Forklift',
   fomfit: 'Forklift',
   management: 'HR & Admin',
   'blown film - unit - 4': 'Blown Film Unit-4',
+  'blown-film unit-4': 'Blown Film Unit-4',
 });
+
+const normalizedDepartmentAliasLookup = new Map(
+  Object.entries(DEPARTMENT_ALIASES).map(([alias, name]) => [normalizeDepartmentKey(alias), name])
+);
 
 export const normalizeDepartmentName = (value) => {
   const name = typeof value === 'string' ? value.trim() : '';
   if (!name) return '';
-  const key = name.toLowerCase();
-  return normalizedDepartmentLookup.get(key) || DEPARTMENT_ALIASES[key] || name;
+  const key = normalizeDepartmentKey(name);
+  return normalizedDepartmentLookup.get(key) || normalizedDepartmentAliasLookup.get(key) || name;
 };
 
 // The single overall super admin. Every other `head` is scoped to the

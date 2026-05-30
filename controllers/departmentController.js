@@ -6,7 +6,7 @@ import {
   renameDepartmentMembers,
 } from '../services/departmentSyncService.js';
 import { isSuperAdmin, departmentsForHead } from '../utils/headScope.js';
-import { DEPARTMENT_NAMES, normalizeDepartmentName, SUPERADMIN_EMAIL } from '../utils/constants.js';
+import { normalizeDepartmentName, SUPERADMIN_EMAIL } from '../utils/constants.js';
 
 const normalizeName = (value) => (typeof value === 'string' ? value.trim() : '');
 const normalizeDepartmentInput = (value) => normalizeDepartmentName(normalizeName(value));
@@ -68,7 +68,8 @@ export const listDepartments = asyncHandler(async (req, res) => {
   const departments = await Department.find(filter)
     .sort({ name: 1 })
     .populate('heads', 'name employeeId email role department active');
-  res.json({ items: await decorateWithCounts(departments), masterDepartments: DEPARTMENT_NAMES });
+  const allDepartmentNames = await Department.find({ active: true }).distinct('name');
+  res.json({ items: await decorateWithCounts(departments), masterDepartments: allDepartmentNames });
 });
 
 // @desc Create a department (heads optional at creation).

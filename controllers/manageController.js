@@ -213,13 +213,16 @@ export const exportReviewQueue = asyncHandler(async (req, res) => {
 //   head      -> every dept_head plus, optionally, every employee
 // @route GET /api/manage/team
 export const getTeam = asyncHandler(async (req, res) => {
-  const { search, department, includeSelf } = req.query;
+  const { search, department, includeHeads, includeSelf } = req.query;
 
   let filter;
   if (req.user.role === 'head') {
-    filter = { active: true, role: { $in: ['employee', 'dept_head'] } };
     // Scoped heads only see staff in their mapped department(s).
     const scope = await resolveHeadScope(req.user);
+    const roles = scope.isSuper && String(includeHeads) === 'true'
+      ? ['employee', 'dept_head', 'head']
+      : ['employee', 'dept_head'];
+    filter = { active: true, role: { $in: roles } };
     if (!scope.isSuper) {
       filter.department = department && scope.departmentNames.includes(department)
         ? department
