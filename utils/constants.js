@@ -38,6 +38,7 @@ export const DEPARTMENT_NAMES = Object.freeze([
   'Lamination - SEW NW HSS',
   'Lamination - SEW NW BASF',
   'Slitting',
+  'Inspection',
   'Quality',
   'Pouch',
   'Boiler',
@@ -79,12 +80,18 @@ const DEPARTMENT_ALIASES = Object.freeze({
   dispatch: 'Supervisor (Dispatch)',
   'supervisor dispatch': 'Supervisor (Dispatch)',
   'supervisor(dispatch)': 'Supervisor (Dispatch)',
+  'supervisor( dispatch)': 'Supervisor (Dispatch)',
+  'supervisor(dispatch )': 'Supervisor (Dispatch)',
 
   'supervisor production': 'Supervisor (Production)',
   'supervisor(production)': 'Supervisor (Production)',
+  'supervisor( production)': 'Supervisor (Production)',
+  'supervisor(production )': 'Supervisor (Production)',
 
   'supervisor ink': 'Supervisor (Ink)',
   'supervisor(ink)': 'Supervisor (Ink)',
+  'supervisor( ink)': 'Supervisor (Ink)',
+  'supervisor(ink )': 'Supervisor (Ink)',
 
   // PPC
   'ppc-deo': 'PPC',
@@ -122,9 +129,6 @@ const DEPARTMENT_ALIASES = Object.freeze({
   'lamination-narendra': 'Lamination',
   'lamination - narendra': 'Lamination',
 
-  // Quality
-  inspection: 'Quality',
-
   // Forklift
   forlift: 'Forklift',
   fomfit: 'Forklift',
@@ -134,6 +138,7 @@ const DEPARTMENT_ALIASES = Object.freeze({
   'blown-film unit-4': 'Blown Film Unit-4',
   'blown film-unit-4': 'Blown Film Unit-4',
   'blown film - unit - 4': 'Blown Film Unit-4',
+  'blown-film-unit-4': 'Blown Film Unit-4',
 });
 
 const normalizedDepartmentAliasLookup = new Map(
