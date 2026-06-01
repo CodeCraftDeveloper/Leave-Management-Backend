@@ -168,28 +168,32 @@ export const computePayroll = async (employee, month, year, opts = {}) => {
 
 /**
  * Live earnings tracker for the employee salary screen.
- * Earnings are driven by ACTUAL attendance, based on BASIC salary:
- *   perDay          = basicSalary / totalDaysInMonth
+ * Earnings are driven by ACTUAL attendance, based on monthly salary (gross):
+ *   perDay          = monthlySalary / totalDaysInMonth
  *   currentEarnings = presentDays   * perDay   (full present days only;
  *                                               leaves & absents are not paid)
- *   sundayEarnings  = sundaysWorked * perDay   (shown in its own box; not
- *                                               part of basic/current earnings)
+ *   sundayEarnings  = sundaysWorked * perDay * sundayPayMultiplier
  * Pure read — no DB writes.
  */
 export const computeLiveEarnings = async (employee, month, year) => {
-  const structure = await SalaryStructure.findOne({ employee: employee._id });
+  const [structure, settings] = await Promise.all([
+    SalaryStructure.findOne({ employee: employee._id }),
+    Settings.get(),
+  ]);
+  const monthlySalary = Number(structure?.monthlySalary ?? employee.monthlySalary ?? 0);
   const basicSalary = Number(structure?.basicSalary ?? 0);
   const summary = await buildMonthlySummary(employee, month, year);
 
   const perDaySalary = r2(
-    summary.totalDaysInMonth > 0 ? basicSalary / summary.totalDaysInMonth : 0
+    summary.totalDaysInMonth > 0 ? monthlySalary / summary.totalDaysInMonth : 0
   );
   const currentEarnings = r2(summary.presentDays * perDaySalary);
-  const sundayEarnings = r2(summary.sundaysWorked * perDaySalary);
+  const sundayEarnings = r2(summary.sundaysWorked * perDaySalary * settings.sundayPayMultiplier);
 
   return {
     month,
     year,
+    monthlySalary: r2(monthlySalary),
     basicSalary: r2(basicSalary),
     totalDaysInMonth: summary.totalDaysInMonth,
     presentDays: summary.presentDays,

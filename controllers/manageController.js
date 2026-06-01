@@ -2,46 +2,29 @@ import asyncHandler from 'express-async-handler';
 import ExcelJS from 'exceljs';
 import Leave from '../models/Leave.js';
 import Employee from '../models/Employee.js';
-import Department from '../models/Department.js';
 import Notification from '../models/Notification.js';
 import { assessDepartmentStaffing } from '../utils/staffingCoverage.js';
 import {
-  sendLeaveStatusEmail,
   sendLeaveApprovedHeadNotice,
-  sendLeaveReversedEmail,
+  sendLeaveStatusEmail,
 } from '../services/emailService.js';
-import { onLeaveApproved, onApprovedLeaveCancelled } from '../services/leaveLifecycleService.js';
+import { onLeaveApproved } from '../services/leaveLifecycleService.js';
 import { getApprovedLeavesForWeek, sendWeeklyHeadDigest } from '../services/weeklyDigestService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
 import { isSuperAdmin, resolveHeadScope, scopeAllowsDepartment } from '../utils/headScope.js';
-import { normalizeDepartmentName } from '../utils/constants.js';
-import { listDepartmentOverallHeads } from '../utils/approverResolver.js';
+import { normalizeDepartmentName, SUPERADMIN_EMAILS } from '../utils/constants.js';
+import { listPostApprovalNoticeHeadsForEmployee } from '../utils/approverResolver.js';
 
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 
 // Build the Mongo filter for leave rows that `req.user` is allowed to review.
-// dept_head:   leaves where they are the assigned approver. We also include
-//              fallback by department in case an old leave has no approver stamped.
-// head:        the department(s) they are mapped to via Department.heads.
+// head:        employees whose row routes to the head's email.
 // super admin: full organisation visibility.
 const scopedLeaveFilter = async (user) => {
-  if (user.role === 'head') {
+  if (['head', 'dept_head'].includes(user.role)) {
     const scope = await resolveHeadScope(user);
     if (scope.isSuper) return {};
     return { employee: { $in: scope.employeeIds } };
-  }
-  if (user.role === 'dept_head') {
-    const sameDept = await Employee.find({
-      department: user.department,
-      active: true,
-      _id: { $ne: user._id },
-    }).select('_id');
-    return {
-      $or: [
-        { approver: user._id },
-        { employee: { $in: sameDept.map((d) => d._id) } },
-      ],
-    };
   }
   // Anyone else - empty scope.
   return { _id: null };
@@ -93,7 +76,11 @@ const buildReviewQueueFilter = async (user, query = {}) => {
       ],
     }).select('_id');
 
-    filter.employee = { $in: employees.map((e) => e._id) };
+    const matchingIds = employees.map((e) => e._id);
+    const scopedIds = baseFilter.employee?.$in
+      ? matchingIds.filter((id) => new Set(baseFilter.employee.$in.map(String)).has(String(id)))
+      : matchingIds;
+    filter.employee = { $in: scopedIds };
   }
 
   return filter;
@@ -170,7 +157,7 @@ export const exportReviewQueue = asyncHandler(async (req, res) => {
     sheet.addRow({
       employeeId: leave.employee?.employeeId || '',
       name: leave.employee?.name || '',
-      role: leave.employee?.role === 'dept_head' ? 'Department Head' : 'Employee',
+      role: leave.employee?.role === 'dept_head' ? 'Department Head' : leave.employee?.role === 'head' ? 'Head' : 'Employee',
       department: leave.employee?.department || '',
       designation: leave.employee?.designation || '',
       email: leave.employee?.email || '',
@@ -209,48 +196,63 @@ export const exportReviewQueue = asyncHandler(async (req, res) => {
 });
 
 // @desc My team — employees I oversee
-//   dept_head -> active employees in same department (excluding self by default)
-//   head      -> every dept_head plus, optionally, every employee
+//   head -> employees routed to this head's approval email
 // @route GET /api/manage/team
 export const getTeam = asyncHandler(async (req, res) => {
-  const { search, department, includeHeads, includeSelf } = req.query;
+  const { search, department, includeHeads } = req.query;
 
   let filter;
-  if (req.user.role === 'head') {
-    // Scoped heads only see staff in their mapped department(s).
+  if (['head', 'dept_head'].includes(req.user.role)) {
+    // Scoped heads only see employees routed to their approval email.
     const scope = await resolveHeadScope(req.user);
     const roles = scope.isSuper && String(includeHeads) === 'true'
       ? ['employee', 'dept_head', 'head']
       : ['employee', 'dept_head'];
     filter = { active: true, role: { $in: roles } };
+    if (scope.isSuper && String(includeHeads) === 'true') {
+      filter.$or = [
+        { role: { $ne: 'head' } },
+        { _id: req.user._id },
+        {
+          $and: [
+            { email: { $nin: SUPERADMIN_EMAILS } },
+            { notificationEmail: { $nin: SUPERADMIN_EMAILS } },
+          ],
+        },
+      ];
+    }
     if (!scope.isSuper) {
-      filter.department = department && scope.departmentNames.includes(department)
-        ? department
-        : { $in: scope.departmentNames };
+      filter._id = { $in: scope.employeeIds };
+      if (department && scope.departmentNames.includes(department)) {
+        filter.department = department;
+      }
     } else if (department) {
       filter.department = department;
     }
-  } else if (req.user.role === 'dept_head') {
-    filter = { active: true, department: req.user.department };
-    if (!includeSelf) filter._id = { $ne: req.user._id };
   } else {
     res.status(403);
     throw new Error('Not authorized');
   }
 
   if (search) {
-    filter.$or = [
+    const searchOr = [
       { name: { $regex: search, $options: 'i' } },
       { employeeId: { $regex: search, $options: 'i' } },
       { email: { $regex: search, $options: 'i' } },
     ];
+    if (filter.$or) {
+      filter.$and = [...(filter.$and || []), { $or: filter.$or }, { $or: searchOr }];
+      delete filter.$or;
+    } else {
+      filter.$or = searchOr;
+    }
   }
 
   const employees = await Employee.find(filter)
     .sort({ department: 1, role: -1, name: 1 })
     .select('-password -emailVerifyCode -emailVerifyExpires -emailVerifyAttempts');
 
-  // Group by department for convenient rendering — dept_heads only have one.
+  // Group by department for convenient rendering.
   const grouped = {};
   for (const emp of employees) {
     const key = emp.department || 'Unassigned';
@@ -268,13 +270,6 @@ const rejectStaffingLimit = (res, staffingCoverage) => res.status(409).json({
 
 // @desc Approve / reject a leave I'm allowed to review.
 // @route PATCH /api/manage/leaves/:id
-//
-// Two valid transitions:
-//   pending  -> approved | rejected  (dept_head for their team; head for anyone)
-//   approved -> rejected             (head-only override of a dept_head's
-//                                     approval, allowed only before startDate)
-// The override path unwinds the attendance stamps the approval laid down and
-// notifies both the employee and the original approving dept_head.
 export const actionLeave = asyncHandler(async (req, res) => {
   const { status, adminComment, overrideStaffingLimit, staffingOverrideReason } = req.body;
   if (!['approved', 'rejected'].includes(status)) {
@@ -287,30 +282,16 @@ export const actionLeave = asyncHandler(async (req, res) => {
     throw new Error('Leave not found');
   }
 
-  // Heads action leaves within their department scope (super admin = any dept);
-  // dept_heads action their own department's employees only.
-  let isHead = false;
-  if (req.user.role === 'head') {
-    const scope = await resolveHeadScope(req.user);
-    isHead = scopeAllowsDepartment(scope, leave.employee?.department);
-  }
-  const isDeptScoped =
-    req.user.role === 'dept_head' &&
-    leave.employee?.department === req.user.department &&
-    leave.employee._id.toString() !== req.user._id.toString();
-  if (!isHead && !isDeptScoped) {
+  const scope = await resolveHeadScope(req.user);
+  const canAction = scope.employeeIds === null || scope.employeeIds.map(String).includes(String(leave.employee?._id));
+  if (!canAction) {
     res.status(403);
     throw new Error('You cannot action this leave');
   }
 
-  const isOverride = leave.status === 'approved' && isHead && status === 'rejected';
-  if (leave.status !== 'pending' && !isOverride) {
+  if (leave.status !== 'pending') {
     res.status(400);
     throw new Error(`Leave already ${leave.status}`);
-  }
-  if (isOverride && new Date(leave.startDate) <= new Date()) {
-    res.status(400);
-    throw new Error('Cannot overturn an approval once the leave has started');
   }
 
   let staffingCoverage;
@@ -334,9 +315,6 @@ export const actionLeave = asyncHandler(async (req, res) => {
     }
   }
 
-  // Snapshot who originally approved before we overwrite actionedBy.
-  const originalApproverId = isOverride ? leave.actionedBy : null;
-
   leave.status = status;
   leave.adminComment = adminComment || '';
   leave.actionedBy = req.user._id;
@@ -346,13 +324,7 @@ export const actionLeave = asyncHandler(async (req, res) => {
   leave.staffingSnapshot = status === 'approved' ? staffingCoverage : undefined;
   await leave.save();
 
-  if (isOverride) {
-    try {
-      await onApprovedLeaveCancelled(leave);
-    } catch (err) {
-      console.error('Leave override cleanup failed:', err.message);
-    }
-  } else if (status === 'approved') {
+  if (status === 'approved') {
     try {
       await onLeaveApproved(leave, req.user._id);
     } catch (err) {
@@ -360,65 +332,35 @@ export const actionLeave = asyncHandler(async (req, res) => {
     }
   }
 
-  if (isOverride) {
-    const originalApprover = originalApproverId
-      ? await Employee.findById(originalApproverId).select('name email _id employeeId')
-      : null;
-    await Notification.create({
-      recipient: leave.employee._id,
-      title: 'Leave Approval Overturned',
-      message: `Your previously approved ${leaveTypeLabel(leave.leaveType)} has been overturned by Head.${adminComment ? ' Note: ' + adminComment : ''}`,
-      type: 'error',
-      link: '/history',
-    });
-    if (originalApprover && originalApprover._id.toString() !== req.user._id.toString()) {
-      await Notification.create({
-        recipient: originalApprover._id,
-        title: 'Approval Overturned by Head',
-        message: `Head overturned your approval of ${leave.employee.name}'s ${leaveTypeLabel(leave.leaveType)}.`,
-        type: 'warning',
-        link: '/manage/leaves?status=rejected',
-      });
-    }
-    await sendLeaveReversedEmail({
-      employee: leave.employee,
-      originalApprover,
-      leave,
-      reversedBy: req.user,
-    });
-  } else {
-    await Notification.create({
-      recipient: leave.employee._id,
-      title: `Leave ${status}`,
-      message: `Your ${leaveTypeLabel(leave.leaveType)} has been ${status}.${adminComment ? ' Note: ' + adminComment : ''}`,
-      type: status === 'approved' ? 'success' : 'error',
-      link: '/history',
-    });
-    await sendLeaveStatusEmail({ employee: leave.employee, leave });
+  await Notification.create({
+    recipient: leave.employee._id,
+    title: `Leave ${status}`,
+    message: `Your ${leaveTypeLabel(leave.leaveType)} has been ${status}.${adminComment ? ' Note: ' + adminComment : ''}`,
+    type: status === 'approved' ? 'success' : 'error',
+    link: '/history',
+  });
+  await sendLeaveStatusEmail({ employee: leave.employee, leave });
 
-    // When a dept_head approves an employee's leave, notify the department's
-    // overall Heads group. They receive the workforce-review signal and can
-    // overturn the approval before the leave starts.
-    if (status === 'approved' && req.user.role === 'dept_head') {
-      const heads = await listDepartmentOverallHeads(leave.employee.department, {
-        excludeId: req.user._id,
-      });
-      if (heads.length) {
-        await Promise.all(heads.map((head) => Notification.create({
-          recipient: head._id,
-          title: 'Leave Approved by Dept Head',
-          message: `${req.user.name} approved ${leave.employee.name}'s ${leaveTypeLabel(leave.leaveType)} for ${leave.totalDays} day(s). You can overturn before it starts.`,
-          type: 'info',
-          link: '/head/leaves?status=approved',
-        })));
-        await sendLeaveApprovedHeadNotice({
-          heads,
-          employee: leave.employee,
-          leave,
-          approvedBy: req.user,
-        });
-      }
-    }
+  if (status === 'approved') {
+    const noticeHeads = await listPostApprovalNoticeHeadsForEmployee(leave.employee, {
+      excludeId: req.user._id,
+    });
+    const headNotifications = noticeHeads
+      .filter((head) => head?._id)
+      .map((head) => Notification.create({
+        recipient: head._id,
+        title: 'Leave Approved',
+        message: `${req.user.name} approved ${leave.employee.name} (${leave.employee.employeeId}) leave.`,
+        type: 'success',
+        link: '/head/leaves?status=approved',
+      }));
+    await Promise.all(headNotifications);
+    await sendLeaveApprovedHeadNotice({
+      heads: noticeHeads,
+      employee: leave.employee,
+      leave,
+      approvedBy: req.user,
+    });
   }
 
   res.json(leave);
@@ -486,56 +428,11 @@ export const createEmployee = asyncHandler(async (req, res) => {
   res.status(201).json({ message: `${name} added to ${department}`, employee: safe });
 });
 
-// @desc Head-only role assignment: employee <-> dept_head
+// @desc Legacy department-head role assignment (retired)
 // @route PATCH /api/manage/employees/:id/role
 export const updateEmployeeRole = asyncHandler(async (req, res) => {
-  if (!isSuperAdmin(req.user)) {
-    res.status(403);
-    throw new Error('Only the super admin can manage department-head assignments');
-  }
-
-  const { role } = req.body;
-  if (!['employee', 'dept_head'].includes(role)) {
-    res.status(400);
-    throw new Error('Role must be employee or dept_head');
-  }
-
-  if (String(req.params.id) === String(req.user._id)) {
-    res.status(400);
-    throw new Error('You cannot change your own role from this screen');
-  }
-
-  const employee = await Employee.findOne({
-    _id: req.params.id,
-    role: { $in: ['employee', 'dept_head'] },
-    active: true,
-  });
-  if (!employee) {
-    res.status(404);
-    throw new Error('Employee not found or role cannot be changed');
-  }
-
-  employee.role = role;
-  await employee.save();
-
-  if (role === 'dept_head') {
-    await Department.updateOne(
-      { name: employee.department, active: true },
-      { $addToSet: { heads: employee._id } }
-    );
-  } else {
-    await Department.updateMany(
-      { heads: employee._id },
-      { $pull: { heads: employee._id } }
-    );
-  }
-
-  res.json({
-    message: role === 'dept_head'
-      ? `${employee.name} is now a department head`
-      : `${employee.name} was removed from department head`,
-    employee,
-  });
+  res.status(410);
+  throw new Error('Department-head approval has been retired. Assign approval by employee head emails instead.');
 });
 
 // @desc Preview the approved leaves in the current weekly digest window

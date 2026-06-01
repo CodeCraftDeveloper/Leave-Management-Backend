@@ -5,8 +5,8 @@ import {
   syncEmployeeRoles,
   renameDepartmentMembers,
 } from '../services/departmentSyncService.js';
-import { isSuperAdmin, departmentsForHead } from '../utils/headScope.js';
-import { normalizeDepartmentName, SUPERADMIN_EMAIL } from '../utils/constants.js';
+import { isSuperAdmin, departmentsForHead, resolveHeadScope } from '../utils/headScope.js';
+import { normalizeDepartmentName, SUPERADMIN_EMAILS } from '../utils/constants.js';
 
 const normalizeName = (value) => (typeof value === 'string' ? value.trim() : '');
 const normalizeDepartmentInput = (value) => normalizeDepartmentName(normalizeName(value));
@@ -60,15 +60,18 @@ const decorateWithCounts = async (departments) => {
 export const listDepartments = asyncHandler(async (req, res) => {
   const { includeInactive } = req.query;
   const filter = includeInactive === 'true' ? {} : { active: true };
-  // A scoped head only sees the department(s) they are mapped to; the super
-  // admin sees them all.
+  // A scoped head only sees departments that contain employees routed to their
+  // approval email; the super admin sees them all.
+  let allDepartmentNames;
   if (!isSuperAdmin(req.user)) {
-    filter.heads = req.user._id;
+    allDepartmentNames = await departmentsForHead(req.user);
+    filter.name = { $in: allDepartmentNames };
+  } else {
+    allDepartmentNames = await Department.find({ active: true }).distinct('name');
   }
   const departments = await Department.find(filter)
     .sort({ name: 1 })
     .populate('heads', 'name employeeId email role department active');
-  const allDepartmentNames = await Department.find({ active: true }).distinct('name');
   res.json({ items: await decorateWithCounts(departments), masterDepartments: allDepartmentNames });
 });
 
@@ -226,15 +229,18 @@ export const getDepartment = asyncHandler(async (req, res) => {
     throw new Error('Department not found');
   }
   await assertCanManageDepartment(res, req.user, department.name);
+  const scope = await resolveHeadScope(req.user);
 
   // Members are the staff who *belong* to the department (employees +
   // the single department head). Overseeing `head` accounts are surfaced
   // separately via department.heads, not as members.
-  const members = await Employee.find({
+  const memberFilter = {
     department: department.name,
     active: true,
     role: { $in: ['employee', 'dept_head'] },
-  })
+  };
+  if (!scope.isSuper) memberFilter._id = { $in: scope.employeeIds };
+  const members = await Employee.find(memberFilter)
     .sort({ role: -1, name: 1 })
     .select(memberSelect)
     .lean();
@@ -247,6 +253,7 @@ export const getDepartment = asyncHandler(async (req, res) => {
     role: { $in: ['employee', 'dept_head'] },
     department: { $ne: department.name },
   };
+  if (!scope.isSuper) availableFilter._id = { $in: [] };
   if (search) {
     availableFilter.$or = [
       { name: { $regex: search, $options: 'i' } },
@@ -410,7 +417,7 @@ export const setHeadsGroup = asyncHandler(async (req, res) => {
   }
 
   // Who is currently an overseeing head on this department.
-  const currentHeads = await Employee.find({ _id: { $in: department.heads }, role: 'head' }).select('_id email');
+  const currentHeads = await Employee.find({ _id: { $in: department.heads }, role: 'head' }).select('_id email notificationEmail');
   const removed = currentHeads.filter((h) => !nextIds.includes(String(h._id)));
 
   // Rebuild heads[] = single dept head (if any) + the new head group.
@@ -420,7 +427,8 @@ export const setHeadsGroup = asyncHandler(async (req, res) => {
 
   // Revoke the head role from anyone removed who no longer heads anything else.
   for (const head of removed) {
-    if (String(head.email || '').toLowerCase() === SUPERADMIN_EMAIL) continue;
+    const headEmails = [head.email, head.notificationEmail].map((value) => String(value || '').toLowerCase());
+    if (headEmails.some((email) => SUPERADMIN_EMAILS.includes(email))) continue;
     const stillHeadsElsewhere = await Department.exists({ heads: head._id, _id: { $ne: department._id } });
     if (!stillHeadsElsewhere) {
       await Employee.updateOne({ _id: head._id, role: 'head' }, { $set: { role: 'employee' } });

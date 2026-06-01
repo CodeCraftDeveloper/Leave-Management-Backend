@@ -12,17 +12,26 @@ import { sendLeaveStatusEmail } from '../services/emailService.js';
 import { onLeaveApproved } from '../services/leaveLifecycleService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
 import { resolveHeadScope, intersectWithScope, scopeAllowsDepartment } from '../utils/headScope.js';
-import { normalizeDepartmentName } from '../utils/constants.js';
+import { DEPARTMENT_HEAD_EMPLOYEE_IDS, normalizeDepartmentName } from '../utils/constants.js';
 
 const STAFF_ROLES = ['employee', 'dept_head'];
 const SUPER_ADMIN_MANAGED_ROLES = ['employee', 'dept_head', 'head'];
 
-// Guard: a scoped head may only act on employees inside their department(s).
-// The super admin (scope.isSuper) always passes.
+// Guard: legacy department screens still use department visibility, but leave
+// approval itself must be employee-routed through headNotificationEmails.
 const assertDepartmentInScope = (scope, departmentName, res) => {
   if (!scopeAllowsDepartment(scope, departmentName)) {
     res.status(403);
     throw new Error('This employee is outside your department scope');
+  }
+};
+
+const assertEmployeeInScope = (scope, employeeId, res) => {
+  if (!scope || scope.employeeIds === null) return;
+  const allowed = new Set(scope.employeeIds.map(String));
+  if (!allowed.has(String(employeeId))) {
+    res.status(403);
+    throw new Error('This employee is outside your approval scope');
   }
 };
 
@@ -100,13 +109,14 @@ const rejectStaffingLimit = (res, staffingCoverage) => res.status(409).json({
 // @desc Admin dashboard stats
 // @route GET /api/admin/dashboard
 export const getDashboard = asyncHandler(async (req, res) => {
-  // Heads are department-scoped; the super admin sees the whole organisation.
+  // Heads are employee-scoped by Employee.headNotificationEmails; the super
+  // admin sees the whole organisation.
   const scope = await resolveHeadScope(req.user);
   const employeeScope = scope.isSuper ? {} : { employee: { $in: scope.employeeIds } };
-  const headcountScope = scope.isSuper ? {} : { department: { $in: scope.departmentNames } };
+  const headcountScope = scope.isSuper ? {} : { _id: { $in: scope.employeeIds } };
 
   const [totalEmployees, pending, approved, rejected] = await Promise.all([
-    Employee.countDocuments({ role: { $in: ['employee', 'dept_head'] }, active: true, ...headcountScope }),
+    Employee.countDocuments({ role: { $in: STAFF_ROLES }, active: true, ...headcountScope }),
     Leave.countDocuments({ status: 'pending', ...employeeScope }),
     Leave.countDocuments({ status: 'approved', ...employeeScope }),
     Leave.countDocuments({ status: 'rejected', ...employeeScope }),
@@ -164,7 +174,7 @@ export const getAllLeaves = asyncHandler(async (req, res) => {
   if (status) filter.status = status;
   if (type) filter.leaveType = type;
 
-  // Department scope for the calling head (super admin = unrestricted).
+  // Employee scope for the calling head (super admin = unrestricted).
   const scope = await resolveHeadScope(req.user);
 
   let employeeFilter = {};
@@ -315,9 +325,9 @@ export const updateLeaveStatus = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Leave not found');
   }
-  // Heads can only action leaves of employees in their department(s).
+  // Heads can only action leaves of employees routed to their approval email.
   const scope = await resolveHeadScope(req.user);
-  assertDepartmentInScope(scope, leave.employee?.department, res);
+  assertEmployeeInScope(scope, leave.employee?._id, res);
   if (leave.status !== 'pending') {
     res.status(400);
     throw new Error(`Leave already ${leave.status}`);
@@ -378,16 +388,17 @@ export const updateLeaveStatus = asyncHandler(async (req, res) => {
 // @route GET /api/admin/employees
 export const getEmployees = asyncHandler(async (req, res) => {
   const { search, department, includeHeads, page = 1, limit = 20 } = req.query;
-  // Heads only see employees in their mapped department(s).
+  // Heads only see employees routed to their approval email.
   const scope = await resolveHeadScope(req.user);
   const roles = scope.isSuper && String(includeHeads) === 'true'
     ? SUPER_ADMIN_MANAGED_ROLES
     : STAFF_ROLES;
   const filter = { role: { $in: roles }, active: true };
   if (!scope.isSuper) {
-    filter.department = department && scope.departmentNames.includes(department)
-      ? department
-      : { $in: scope.departmentNames };
+    filter._id = { $in: scope.employeeIds };
+    if (department && scope.departmentNames.includes(department)) {
+      filter.department = department;
+    }
   } else if (department) {
     filter.department = department;
   }
@@ -424,6 +435,10 @@ export const createEmployee = asyncHandler(async (req, res) => {
     res.status(403);
     throw new Error('Only the super admin can create Head accounts');
   }
+  if (nextRole === 'dept_head' && !DEPARTMENT_HEAD_EMPLOYEE_IDS.includes(input.employeeId)) {
+    res.status(400);
+    throw new Error('Department-head role is only allowed for the configured serial 1-19 employees');
+  }
   assertDepartmentInScope(scope, input.department, res);
 
   try {
@@ -451,7 +466,7 @@ export const createEmployee = asyncHandler(async (req, res) => {
 export const getEmployeeDetail = asyncHandler(async (req, res) => {
   const employee = await Employee.findOne({
     _id: req.params.id,
-    role: { $in: ['employee', 'dept_head'] },
+    role: { $in: STAFF_ROLES },
     active: true,
   });
   if (!employee) {
@@ -459,7 +474,7 @@ export const getEmployeeDetail = asyncHandler(async (req, res) => {
     throw new Error('Employee not found');
   }
   const scope = await resolveHeadScope(req.user);
-  assertDepartmentInScope(scope, employee.department, res);
+  assertEmployeeInScope(scope, employee._id, res);
   const leaves = await Leave.find({ employee: employee._id }).sort({ createdAt: -1 }).limit(50);
   res.json({ employee, leaves });
 });
@@ -485,6 +500,10 @@ export const updateEmployee = asyncHandler(async (req, res) => {
     res.status(403);
     throw new Error('Only the super admin can create or edit Head accounts');
   }
+  if (input.role === 'dept_head' && !DEPARTMENT_HEAD_EMPLOYEE_IDS.includes(input.employeeId)) {
+    res.status(400);
+    throw new Error('Department-head role is only allowed for the configured serial 1-19 employees');
+  }
 
   const managedRoles = scope.isSuper ? SUPER_ADMIN_MANAGED_ROLES : STAFF_ROLES;
   const employee = await Employee.findOne({
@@ -501,9 +520,9 @@ export const updateEmployee = asyncHandler(async (req, res) => {
     throw new Error('You cannot change your own role from this screen');
   }
 
-  // Scoped heads can only edit employees in their department(s), and cannot
-  // move them out to a department they don't manage.
-  assertDepartmentInScope(scope, employee.department, res);
+  // Scoped heads can only edit employees routed to their approval email, and
+  // cannot move them out to a department they don't manage.
+  assertEmployeeInScope(scope, employee._id, res);
   assertDepartmentInScope(scope, input.department, res);
 
   try {
@@ -514,7 +533,6 @@ export const updateEmployee = asyncHandler(async (req, res) => {
   }
 
   const previousRole = employee.role;
-  const previousDepartment = employee.department;
   employee.employeeId = input.employeeId;
   employee.name = input.name;
   if (employee.email !== input.email) {
@@ -535,15 +553,7 @@ export const updateEmployee = asyncHandler(async (req, res) => {
     throwEmployeeSaveError(error, res);
   }
 
-  if (employee.role === 'dept_head') {
-    if (previousDepartment !== employee.department || previousRole !== 'dept_head') {
-      await Department.updateMany({ heads: employee._id }, { $pull: { heads: employee._id } });
-      await Department.updateOne(
-        { name: employee.department, active: true },
-        { $addToSet: { heads: employee._id } }
-      );
-    }
-  } else if (previousRole === 'dept_head' || (previousRole === 'head' && employee.role !== 'head')) {
+  if (previousRole === 'dept_head' || (previousRole === 'head' && employee.role !== 'head')) {
     await Department.updateMany({ heads: employee._id }, { $pull: { heads: employee._id } });
   }
 
@@ -569,7 +579,7 @@ export const deleteEmployee = asyncHandler(async (req, res) => {
     throw new Error('You cannot remove your own account from this screen');
   }
 
-  assertDepartmentInScope(scope, employee.department, res);
+  assertEmployeeInScope(scope, employee._id, res);
 
   employee.active = false;
   await employee.save();
@@ -592,7 +602,7 @@ export const updateEmployeeWorkDetails = asyncHandler(async (req, res) => {
 
   const employee = await Employee.findOne({
     _id: req.params.id,
-    role: { $in: ['employee', 'dept_head'] },
+    role: { $in: STAFF_ROLES },
     active: true,
   });
   if (!employee) {
@@ -600,9 +610,9 @@ export const updateEmployeeWorkDetails = asyncHandler(async (req, res) => {
     throw new Error('Employee not found');
   }
 
-  // Scoped heads can only move employees between departments they manage.
+  // Scoped heads can only move employees routed to their approval email.
   const scope = await resolveHeadScope(req.user);
-  assertDepartmentInScope(scope, employee.department, res);
+  assertEmployeeInScope(scope, employee._id, res);
   assertDepartmentInScope(scope, trimmedDepartment, res);
 
   employee.department = trimmedDepartment;
@@ -622,15 +632,16 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
     throw new Error('All fields are required');
   }
 
-  const employee = await Employee.findOne({ _id: employeeId, role: 'employee', active: true });
+  const employee = await Employee.findOne({ _id: employeeId, role: { $in: STAFF_ROLES }, active: true });
   if (!employee) {
     res.status(404);
     throw new Error('Employee not found');
   }
 
-  // Scoped heads can only log leave for employees in their department(s).
+  // Scoped heads can only log leave for employees routed to their approval
+  // email.
   const scope = await resolveHeadScope(req.user);
-  assertDepartmentInScope(scope, employee.department, res);
+  assertEmployeeInScope(scope, employee._id, res);
 
   const isHalfDayBool = String(isHalfDay) === 'true';
 

@@ -62,9 +62,10 @@ export const adminDashboard = asyncHandler(async (req, res) => {
   const month = now.getMonth() + 1;
   const year = now.getFullYear();
 
-  // Heads are department-scoped; the super admin sees the whole organisation.
+  // Heads are employee-scoped by Employee.headNotificationEmails; the super
+  // admin sees the whole organisation.
   const scope = await resolveHeadScope(req.user);
-  const headcountScope = scope.isSuper ? {} : { department: { $in: scope.departmentNames } };
+  const headcountScope = scope.isSuper ? {} : { _id: { $in: scope.employeeIds } };
   const employeeScope = scope.isSuper ? {} : { employee: { $in: scope.employeeIds } };
   const attendanceScope = scope.isSuper ? {} : { employee: { $in: scope.employeeIds } };
 

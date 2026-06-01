@@ -59,7 +59,7 @@ export const headOrSuperAdmin = asyncHandler(async (req, res, next) => {
 });
 
 // Any reviewer — used for the shared management surface (My Team, review queue).
-export const reviewerOnly = authorize('dept_head', 'head');
+export const reviewerOnly = authorize('head', 'dept_head');
 
 // Legacy guards for the payroll/salary-structure helpers that still reference
 // `hr`. Heads inherit everything the old `admin` could do.

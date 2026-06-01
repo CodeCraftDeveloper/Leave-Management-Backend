@@ -81,10 +81,10 @@ export const leaveStatusUpdateTemplate = ({ employee, leave }) => {
 export const leaveApprovedHeadNoticeTemplate = ({ head, employee, leave, approvedBy }) =>
   wrap(`
     <h2 style="margin-top:0;">Hi ${head?.name?.split(' ')[0] || 'there'},</h2>
-    <p><b>${approvedBy?.name || 'A department head'}</b> approved a leave request from <b>${employee.name}</b> (${employee.employeeId} &middot; ${employee.department}).</p>
+    <p><b>${approvedBy?.name || 'A reviewer'}</b> approved a leave request from <b>${employee.name}</b> (${employee.employeeId} &middot; ${employee.department}).</p>
     ${detailsTable(leave)}
     ${leave.adminComment ? `<p><b>Approver Comment:</b> ${leave.adminComment}</p>` : ''}
-    <p style="font-size:13px;color:#6b7280;">You can overturn this approval from the Leave Portal up until the leave start date.</p>
+    <p style="font-size:13px;color:#6b7280;">This is a feedback notice for the mapped Head group.</p>
   `);
 
 export const leaveReversedTemplate = ({ recipientName, employee, leave, reversedBy, wasOriginalApprover }) =>

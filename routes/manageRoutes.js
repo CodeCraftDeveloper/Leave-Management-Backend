@@ -18,7 +18,6 @@ import {
   deleteDepartment,
   addMember,
   removeMember,
-  setDepartmentHead,
   setHeadsGroup,
 } from '../controllers/departmentController.js';
 
@@ -43,13 +42,12 @@ router.post('/weekly-digest/send', superAdminOnly, sendWeeklyDigestNow);
 // department(s) they head; super admin sees all). Mutations are open to heads,
 // but the controllers restrict scoped heads to the departments they oversee.
 router.get('/departments', listDepartments);
-router.post('/departments', headOrSuperAdmin, createDepartment);
+router.post('/departments', superAdminOnly, createDepartment);
 router.get('/departments/:id', headOrSuperAdmin, getDepartment);
-router.patch('/departments/:id', headOrSuperAdmin, updateDepartment);
-router.delete('/departments/:id', headOrSuperAdmin, deleteDepartment);
-router.post('/departments/:id/members', headOrSuperAdmin, addMember);
-router.delete('/departments/:id/members/:employeeId', headOrSuperAdmin, removeMember);
-router.patch('/departments/:id/department-head', headOrSuperAdmin, setDepartmentHead);
-router.patch('/departments/:id/heads-group', headOrSuperAdmin, setHeadsGroup);
+router.patch('/departments/:id', superAdminOnly, updateDepartment);
+router.delete('/departments/:id', superAdminOnly, deleteDepartment);
+router.post('/departments/:id/members', superAdminOnly, addMember);
+router.delete('/departments/:id/members/:employeeId', superAdminOnly, removeMember);
+router.patch('/departments/:id/heads-group', superAdminOnly, setHeadsGroup);
 
 export default router;

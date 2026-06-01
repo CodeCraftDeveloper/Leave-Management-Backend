@@ -7,12 +7,11 @@ import { sendLeaveAppliedEmails, sendLeaveStatusEmail } from '../services/emailS
 import { onApprovedLeaveCancelled } from '../services/leaveLifecycleService.js';
 import {
   resolveApprover,
-  listDepartmentHeads,
-  listDepartmentOverallHeads,
+  listApprovalHeadsForEmployee,
 } from '../utils/approverResolver.js';
 import { isBeforeTodayIST } from '../utils/dateHelpers.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
-import { resolveHeadScope, scopeAllowsDepartment } from '../utils/headScope.js';
+import { resolveHeadScope } from '../utils/headScope.js';
 
 // @desc Apply leave
 // @route POST /api/leaves
@@ -118,18 +117,12 @@ export const applyLeave = asyncHandler(async (req, res) => {
 
   const attachment = req.file ? `/uploads/${req.file.filename}` : '';
 
-  // Resolve the approver based on the applicant's role + department so the
-  // request lands in exactly the right inbox. We surface a clear error rather
-  // than silently failing — operations needs to know they're missing a head
-  // or a dept_head for that department.
+  // Resolve the approver from the hybrid routing layer: listed exceptions go
+  // to a department head first, everyone else goes to the Excel Head emails.
   const approver = await resolveApprover(req.user);
   if (!approver) {
     res.status(503);
-    throw new Error(
-      req.user.role === 'employee'
-        ? `No department head assigned for ${req.user.department}. Contact a head to set one.`
-        : `No Head group is assigned for ${req.user.department}. Contact the super admin to set one.`
-    );
+    throw new Error('No approval Head is assigned for your employee record. Contact admin to update your approval email mapping.');
   }
 
   const leave = await Leave.create({
@@ -152,13 +145,9 @@ export const applyLeave = asyncHandler(async (req, res) => {
     type: 'info',
   });
 
-  // Fan-out:
-  // - employee leave -> the department head(s) of the applicant's department
-  // - department-head leave -> the overall Heads group for that department
-  // The stamped approver is still kept for audit/legacy filters.
-  const reviewers = req.user.role === 'employee'
-    ? await listDepartmentHeads(req.user.department, { excludeId: req.user._id })
-    : await listDepartmentOverallHeads(req.user.department, { excludeId: req.user._id });
+  // Notify every initial reviewer. Department-head-first employees only notify
+  // their mapped department head here; Head feedback notices happen after approval.
+  const reviewers = await listApprovalHeadsForEmployee(req.user, { excludeId: req.user._id });
   const reviewerNotifications = reviewers
     .filter((r) => r && r._id)
     .map((reviewer) => Notification.create({
@@ -166,7 +155,7 @@ export const applyLeave = asyncHandler(async (req, res) => {
       title: 'New Leave Request',
       message: `${req.user.name} (${req.user.employeeId}) requested ${totalDays} day(s) of ${leaveTypeLabel(leaveType)}.`,
       type: 'info',
-      link: req.user.role === 'employee' ? '/manage/leaves?status=pending' : '/head/leaves?status=pending',
+      link: '/head/leaves?status=pending',
     }));
   await Promise.all(reviewerNotifications);
 
@@ -199,18 +188,15 @@ export const getLeaveById = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Leave not found');
   }
-  // Visibility: super admin sees everything; a scoped head sees their mapped
-  // department(s); dept_heads see anything in their dept (including their own);
-  // employees see only their own.
+  // Visibility: super admin sees everything; a scoped head sees employees
+  // routed to their head email; employees see only their own.
   const isOwner = leave.employee._id.toString() === req.user._id.toString();
   let isHead = false;
-  if (req.user.role === 'head') {
+  if (['head', 'dept_head'].includes(req.user.role)) {
     const scope = await resolveHeadScope(req.user);
-    isHead = scopeAllowsDepartment(scope, leave.employee.department);
+    isHead = scope.employeeIds === null || scope.employeeIds.map(String).includes(String(leave.employee._id));
   }
-  const isDeptHeadOfApplicant =
-    req.user.role === 'dept_head' && leave.employee.department === req.user.department;
-  if (!isOwner && !isHead && !isDeptHeadOfApplicant) {
+  if (!isOwner && !isHead) {
     res.status(403);
     throw new Error('Not authorized');
   }
@@ -281,16 +267,11 @@ export const getMySummary = asyncHandler(async (req, res) => {
 export const getCalendarLeaves = asyncHandler(async (req, res) => {
   const { from, to, all } = req.query;
   const filter = { status: 'approved' };
-  // Scope: super admin with ?all=1 sees everyone; a scoped head sees their
-  // mapped department(s); dept_head with ?all=1 sees their department; everyone
-  // else sees only their own.
-  if (all && req.user.role === 'head') {
+  // Scope: super admin with ?all=1 sees everyone; a scoped head sees employees
+  // routed to their head email; everyone else sees only their own.
+  if (all && ['head', 'dept_head'].includes(req.user.role)) {
     const scope = await resolveHeadScope(req.user);
     if (!scope.isSuper) filter.employee = { $in: scope.employeeIds };
-  } else if (all && req.user.role === 'dept_head') {
-    const Employee = (await import('../models/Employee.js')).default;
-    const dept = await Employee.find({ department: req.user.department, active: true }).select('_id');
-    filter.employee = { $in: dept.map((d) => d._id) };
   } else {
     filter.employee = req.user._id;
   }

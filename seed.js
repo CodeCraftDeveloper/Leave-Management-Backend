@@ -11,13 +11,18 @@ import Leave from './models/Leave.js';
 import Attendance from './models/Attendance.js';
 import Notification from './models/Notification.js';
 import Holiday from './models/Holiday.js';
-import { normalizeDepartmentName } from './utils/constants.js';
+import { DEPARTMENT_HEAD_EMPLOYEE_IDS, normalizeDepartmentName } from './utils/constants.js';
 
 dotenv.config();
 
 const TEMP_PASSWORD = 'Password@123';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_EMPLOYEE_WORKBOOK = path.resolve(__dirname, '../Employee_Seed_Template.xlsx');
+const WORKBOOK_CANDIDATES = [
+  path.resolve(__dirname, '../Employee_Seed_Template.xlsx'),
+  path.resolve('C:/Users/Design/Downloads/data.xlsx'),
+];
+const DEFAULT_EMPLOYEE_WORKBOOK =
+  WORKBOOK_CANDIDATES.find((candidate) => fs.existsSync(candidate)) || WORKBOOK_CANDIDATES[0];
 const EMPLOYEE_WORKBOOK = process.env.EMPLOYEE_SEED_WORKBOOK
   ? path.resolve(process.env.EMPLOYEE_SEED_WORKBOOK)
   : DEFAULT_EMPLOYEE_WORKBOOK;
@@ -59,8 +64,6 @@ const HEAD_EMAILS = Object.freeze({
   production: 'production.premindustries@gmail.com',
   dileep: 'dileep.singh@premindustries.in',
 });
-
-const departmentHeadIds = new Set(['H641', 'H667', 'H59', 'H633']);
 
 const rosterFromText = (text) =>
   text
@@ -390,7 +393,34 @@ const readWorkbookRoster = async () => {
     if (key) headers[key] = columnNumber;
   });
 
-  const getRawCell = (row, key) => (headers[key] ? row.getCell(headers[key]).value : undefined);
+  const HEADER_ALIASES = {
+    serialNumber: ['serialNumber', 'serial', 'S.no', 'S.No', 'S No', 'Sr No'],
+    employeeId: ['employeeId', 'employee ID', 'Card No', 'CARD NO', 'cardNo'],
+    name: ['name', 'NAME', 'Employee Name'],
+    department: ['department', 'Department'],
+    designation: ['designation', 'Designation', 'REPORT'],
+    headEmails: ['headEmails', 'head emails', 'email', 'EMAIL ID', 'Email ID'],
+    password: ['password', 'Password'],
+    role: ['role', 'Role'],
+    phone: ['phone', 'Phone'],
+    address: ['address', 'Address'],
+    joiningDate: ['joiningDate', 'Joining Date'],
+    monthlySalary: ['monthlySalary', 'Monthly Salary'],
+    status: ['status', 'Status'],
+    emailVerified: ['emailVerified', 'Email Verified'],
+  };
+
+  const columnFor = (key) => {
+    for (const candidate of HEADER_ALIASES[key] || [key]) {
+      if (headers[candidate]) return headers[candidate];
+    }
+    return undefined;
+  };
+
+  const getRawCell = (row, key) => {
+    const column = columnFor(key);
+    return column ? row.getCell(column).value : undefined;
+  };
   const getCell = (row, key) => normalizeCell(getRawCell(row, key));
   const employees = [];
 
@@ -400,15 +430,19 @@ const readWorkbookRoster = async () => {
     const employeeId = getCell(row, 'employeeId').toUpperCase();
     const name = getCell(row, 'name');
     if (!employeeId || !name) return;
+    const serialNumber = parseNumber(getRawCell(row, 'serialNumber'));
+    const department = normalizeDepartmentName(getCell(row, 'department')) || 'General';
+    const designation = getCell(row, 'designation') || department || 'Employee';
 
     employees.push({
+      serialNumber,
       employeeId,
       name,
       email: '',
-      headEmails: extractEmails(getRawCell(row, 'email')),
+      headEmails: extractEmails(getRawCell(row, 'headEmails')),
       password: getCell(row, 'password') || TEMP_PASSWORD,
-      department: normalizeDepartmentName(getCell(row, 'department')) || 'General',
-      designation: getCell(row, 'designation') || getCell(row, 'department') || 'Employee',
+      department,
+      designation,
       role: getCell(row, 'role') || undefined,
       phone: getCell(row, 'phone') || undefined,
       address: getCell(row, 'address') || undefined,
@@ -611,8 +645,8 @@ const run = async () => {
   const roster = await resolveRoster();
   assertUniqueEmployeeIds(roster);
 
-  // Heads: top-of-org reviewers. They do not apply for leave themselves; they
-  // approve dept_head leaves, see the weekly digest, and manage dept_heads.
+  // Heads: approval reviewers. Employees are routed to them by the workbook
+  // EMAIL ID column stored in Employee.headNotificationEmails.
   const heads = buildHeadSeeds(roster);
   const uniqueEmails = uniqueEmailSet([
     ...heads,
@@ -674,13 +708,13 @@ const run = async () => {
     });
   }
 
-  console.log('Seeding department head groups...');
+  console.log('Seeding department groups with approval heads...');
   const departmentGroups = buildDepartmentGroups(roster, headByEmail);
   for (const group of departmentGroups) {
     await Department.create({
       name: group.name,
       code: group.code,
-      description: `Seeded from employee roster. Head group: ${[...group.headEmails].join(', ') || 'none'}.`,
+      description: `Seeded from employee roster. Approval heads: ${[...group.headEmails].join(', ') || 'none'}.`,
       heads: [...group.headIds],
       active: true,
     });
@@ -689,15 +723,20 @@ const run = async () => {
   console.log(`Seeding ${roster.length} employees...`);
   const employeeById = new Map();
   for (const entry of roster) {
-    const isDepartmentHead = departmentHeadIds.has(entry.employeeId);
     const explicitRole = normalizeCell(entry.role);
+    const isListedDepartmentHead = DEPARTMENT_HEAD_EMPLOYEE_IDS.includes(entry.employeeId);
+    const nextRole = isListedDepartmentHead
+      ? 'dept_head'
+      : validRoles.has(explicitRole) && explicitRole !== 'dept_head'
+        ? explicitRole
+        : 'employee';
     const doc = {
       employeeId: entry.employeeId,
       name: titleCase(entry.name),
       password: entry.password || TEMP_PASSWORD,
       department: entry.department,
       designation: entry.designation,
-      role: validRoles.has(explicitRole) ? explicitRole : isDepartmentHead ? 'dept_head' : 'employee',
+      role: nextRole,
       headNotificationEmails: headEmailsForEntry(entry),
     };
 
@@ -732,8 +771,7 @@ const run = async () => {
   for (const credential of headCredentials) {
     console.log(`  ${credential.email} -> ${credential.employeeId} / ${credential.password}`);
   }
-  console.log(`Seeded ${departmentGroups.length} department group(s) with mapped heads.`);
-  console.log(`Department Head -> H641 / ${TEMP_PASSWORD} (Shikhar Tripathi, Digital Market)`);
+  console.log(`Seeded ${departmentGroups.length} department group(s) with mapped approval heads.`);
   console.log(`Employees -> <CardNo> / ${TEMP_PASSWORD} (e.g. H1 / ${TEMP_PASSWORD})`);
   await mongoose.disconnect();
   process.exit(0);

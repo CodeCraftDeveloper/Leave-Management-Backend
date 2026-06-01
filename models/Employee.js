@@ -23,8 +23,8 @@ const employeeSchema = new mongoose.Schema(
     department: { type: String, default: 'General' },
     designation: { type: String, default: 'Employee' },
     // 'employee'  -> applies leave; sees only own data
-    // 'dept_head' -> applies leave (approved by a head); approves leaves of their department
-    // 'head'      -> approves dept_head leaves; full org visibility; manages dept_heads
+    // 'head'      -> approves leaves routed by employee.headNotificationEmails
+    // 'dept_head' -> can approve only explicitly mapped department-head-first requests
     // 'hr'        -> kept for payroll/salary-structure helpers (legacy)
     role: { type: String, enum: ['employee', 'dept_head', 'head', 'hr'], default: 'employee' },
     // Verified via a 6-digit OTP sent to the email address. Required to apply leave.

@@ -82,10 +82,12 @@ export const sendLeaveAppliedEmails = async ({ employee, leave, approver, approv
     }));
   }
 
-  const reviewersWithEmail = reviewerList.filter((r) => r?.email);
-  for (const reviewer of reviewersWithEmail) {
+  const reviewersWithEmail = reviewerList
+    .map((reviewer) => ({ reviewer, to: notificationAddress(reviewer) }))
+    .filter(({ to }) => to);
+  for (const { reviewer, to } of reviewersWithEmail) {
     tasks.push(sendMail({
-      to: reviewer.email,
+      to,
       subject: `New Leave Request - ${employee.name}`,
       html: leaveAppliedAdminTemplate({ employee, leave, approver: reviewer }),
     }));
@@ -124,9 +126,9 @@ export const sendVerificationCodeEmail = async ({ employee, code, expiresInMinut
   });
 };
 
-// Notify the employee's mapped Head group when a dept_head approves leave.
-// Heads get actionable mail because they retain the ability to overturn the
-// approval before the leave start date.
+// Notify the employee's peer Head group after an approval. For department-head
+// first routes this goes to the department feedback Heads; for direct Head
+// routes it goes to the other mapped Head emails.
 export const sendLeaveApprovedHeadNotice = async ({ heads, employee, leave, approvedBy }) => {
   const tasks = heads
     .map((head) => ({ head, to: notificationAddress(head) }))
@@ -134,7 +136,7 @@ export const sendLeaveApprovedHeadNotice = async ({ heads, employee, leave, appr
     .map(({ head, to }) =>
       sendMail({
         to,
-        subject: `Leave Approved by Dept Head - ${employee.name}`,
+        subject: `Leave Approved - ${employee.name}`,
         html: leaveApprovedHeadNoticeTemplate({ head, employee, leave, approvedBy }),
       })
     );

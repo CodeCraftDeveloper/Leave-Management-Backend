@@ -1,106 +1,129 @@
 import Employee from '../models/Employee.js';
-import Department from '../models/Department.js';
+import {
+  DEPARTMENT_HEAD_APPROVALS,
+  DEPARTMENT_POST_APPROVAL_HEAD_EMAILS,
+  normalizeDepartmentName,
+} from './constants.js';
 
-const HEAD_FIELDS = '_id name email employeeId department role';
+const HEAD_FIELDS = '_id name email notificationEmail employeeId department role';
 
-// Resolve who approves a leave for a given applicant.
-//
-//   employee  -> the active dept_head of their department.
-//                Department.heads can also contain overall `head` users, so
-//                this path must explicitly filter to role `dept_head`.
-//   dept_head -> an overall head for their department. Heads don't apply leave,
-//                so they have no approver.
-//
-// Returns the Employee doc (lean) or null when no suitable approver exists.
-export const resolveApprover = async (applicant) => {
-  if (!applicant) return null;
+const normalizedEmails = (values = []) => [
+  ...new Set(
+    values
+      .map((value) => String(value || '').trim().toLowerCase())
+      .filter((value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))
+  ),
+];
 
-  if (applicant.role === 'employee') {
-    const department = await Department.findOne({
-      name: applicant.department,
-      active: true,
-    }).select('heads');
+const approvalEmailsForEmployee = (employee) => normalizedEmails(employee?.headNotificationEmails || []);
 
-    if (department?.heads?.length) {
-      const head = await Employee.findOne({
-        _id: { $in: department.heads, $ne: applicant._id },
-        active: true,
-        role: 'dept_head',
-        department: applicant.department,
-      })
-        .select(HEAD_FIELDS)
-        .lean();
-      if (head) return head;
-    }
+const employeeIdOf = (employee) => String(employee?.employeeId || '').trim().toUpperCase();
 
-    // Legacy fallback for departments not yet materialised.
-    return Employee.findOne({
-      role: 'dept_head',
-      active: true,
-      department: applicant.department,
-      _id: { $ne: applicant._id },
-    })
-      .select(HEAD_FIELDS)
-      .lean();
-  }
+const departmentHeadIdsForEmployee = (employee) =>
+  DEPARTMENT_HEAD_APPROVALS[employeeIdOf(employee)] || [];
 
-  if (applicant.role === 'dept_head') {
-    const department = await Department.findOne({
-      name: applicant.department,
-      active: true,
-    }).select('heads');
+export const isDepartmentHeadRoutedEmployee = (employee) =>
+  departmentHeadIdsForEmployee(employee).length > 0;
 
-    if (!department?.heads?.length) return null;
-
-    return Employee.findOne({
-      _id: { $in: department.heads, $ne: applicant._id },
-      role: 'head',
-      active: true,
-    })
-      .select(HEAD_FIELDS)
-      .lean();
-  }
-
-  return null;
+const displayNameFromEmail = (email) => {
+  const localPart = String(email || '').split('@')[0] || 'head';
+  return localPart
+    .replace(/[._-]+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 };
 
-// All currently-active dept_heads of a department, used by the review-queue
-// scope and by notification fan-out on apply. Overall `head` users are not
-// included here; they are notified only after a dept_head approves.
-export const listDepartmentHeads = async (departmentName, { excludeId } = {}) => {
-  if (!departmentName) return [];
-  const department = await Department.findOne({
-    name: departmentName,
-    active: true,
-  }).select('heads');
-
-  const ids = department?.heads?.length ? department.heads : null;
-  const filter = ids
-    ? { _id: { $in: ids }, active: true, role: 'dept_head', department: departmentName }
-    : { role: 'dept_head', department: departmentName, active: true };
-  if (excludeId) filter._id = { ...(filter._id || {}), $ne: excludeId };
-
-  return Employee.find(filter).select(HEAD_FIELDS).lean();
-};
-
-// Overall Heads group for a department. These users receive the post-approval
-// workforce review notification and can overturn an approved leave before it
-// starts.
-export const listDepartmentOverallHeads = async (departmentName, { excludeId } = {}) => {
-  if (!departmentName) return [];
-  const department = await Department.findOne({
-    name: departmentName,
-    active: true,
-  }).select('heads');
-
-  if (!department?.heads?.length) return [];
+const findHeadsByEmails = async (emails, { excludeId, excludeEmails = [], includeSynthetic = false } = {}) => {
+  const normalized = normalizedEmails(emails);
+  if (!normalized.length) return [];
 
   const filter = {
-    _id: { $in: department.heads },
     active: true,
     role: 'head',
+    $or: [
+      { email: { $in: normalized } },
+      { notificationEmail: { $in: normalized } },
+    ],
   };
-  if (excludeId) filter._id = { ...filter._id, $ne: excludeId };
+  if (excludeId) filter._id = { $ne: excludeId };
+
+  const heads = await Employee.find(filter).select(HEAD_FIELDS).lean();
+  if (!includeSynthetic) return heads;
+
+  const excludedEmails = new Set(normalizedEmails(excludeEmails));
+  if (excludeId) {
+    const excludedHead = await Employee.findById(excludeId).select('email notificationEmail').lean();
+    for (const email of normalizedEmails([excludedHead?.email, excludedHead?.notificationEmail])) {
+      excludedEmails.add(email);
+    }
+  }
+
+  const foundEmails = new Set(
+    heads.flatMap((head) => normalizedEmails([head.email, head.notificationEmail]))
+  );
+  const synthetic = normalized
+    .filter((email) => !foundEmails.has(email) && !excludedEmails.has(email))
+    .map((email) => ({
+      name: displayNameFromEmail(email),
+      email,
+      notificationEmail: email,
+      role: 'head',
+    }));
+  return [...heads, ...synthetic];
+};
+
+export const listDepartmentHeadsForEmployee = async (employee, { excludeId } = {}) => {
+  const employeeIds = departmentHeadIdsForEmployee(employee);
+  if (!employeeIds.length) return [];
+
+  const filter = {
+    active: true,
+    role: 'dept_head',
+    employeeId: { $in: employeeIds },
+  };
+  if (excludeId) filter._id = { $ne: excludeId };
 
   return Employee.find(filter).select(HEAD_FIELDS).lean();
 };
+
+export const listDirectApprovalHeadsForEmployee = async (employee, { excludeId } = {}) => {
+  const emails = approvalEmailsForEmployee(employee);
+  return findHeadsByEmails(emails, { excludeId });
+};
+
+export const listApprovalHeadsForEmployee = async (employee, { excludeId } = {}) => {
+  if (isDepartmentHeadRoutedEmployee(employee)) {
+    const departmentHeads = await listDepartmentHeadsForEmployee(employee, { excludeId });
+    if (departmentHeads.length) return departmentHeads;
+  }
+
+  const emails = approvalEmailsForEmployee(employee);
+  if (!emails.length) return [];
+
+  return findHeadsByEmails(emails, { excludeId });
+};
+
+export const listPostApprovalNoticeHeadsForEmployee = async (employee, { excludeId } = {}) => {
+  if (isDepartmentHeadRoutedEmployee(employee)) {
+    const department = normalizeDepartmentName(employee?.department);
+    const emails = DEPARTMENT_POST_APPROVAL_HEAD_EMAILS[department] || approvalEmailsForEmployee(employee);
+    return findHeadsByEmails(emails, { excludeId, includeSynthetic: true });
+  }
+
+  return findHeadsByEmails(approvalEmailsForEmployee(employee), {
+    excludeId,
+    includeSynthetic: true,
+  });
+};
+
+// Resolve the primary approver stamped on the leave row. Notifications still
+// fan out to every mapped Head, but this keeps the existing approver audit field
+// useful for exports and old filters.
+export const resolveApprover = async (applicant) => {
+  if (!applicant || applicant.role === 'head') return null;
+  const heads = await listApprovalHeadsForEmployee(applicant, { excludeId: applicant._id });
+  return heads[0] || null;
+};
+
+// Back-compat exports for older imports.
+export const listDepartmentHeads = listDepartmentHeadsForEmployee;
+export const listDepartmentOverallHeads = listPostApprovalNoticeHeadsForEmployee;

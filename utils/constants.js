@@ -8,7 +8,71 @@ export const ROLES = Object.freeze({
 });
 
 // Roles that can review/approve leave requests of others.
-export const REVIEWER_ROLES = Object.freeze(['dept_head', 'head']);
+// Heads review employee-email-routed requests. A small set of listed
+// department heads can review only explicitly mapped employees.
+export const REVIEWER_ROLES = Object.freeze(['head', 'dept_head']);
+
+// Only the Accounts and Digital Market departments run the hybrid
+// (department-head-first) approval model, so only their members carry the
+// dept_head role. Everyone else uses single-step notification-head routing.
+export const DEPARTMENT_HEAD_EMPLOYEE_IDS = Object.freeze([
+  // Accounts
+  'H532',
+  'H317',
+  'H545',
+  'H704',
+  // Digital Market
+  'H641',
+  'H666',
+  'H386',
+  'H602',
+  'H689',
+]);
+
+// Hybrid approval routing — Accounts and Digital Market only. The first reviewer
+// is the mapped department head (Accounts -> H317 Praveen Kumar, Digital -> H641
+// Shikhar Tripathi). If the applicant is the department head themself, the
+// resolver falls back to the Excel Head emails so nobody approves their own
+// leave. All other departments are intentionally absent here and route straight
+// to their notification heads.
+export const DEPARTMENT_HEAD_APPROVALS = Object.freeze({
+  // Accounts -> Praveen Kumar (H317)
+  H532: Object.freeze(['H317']),
+  H317: Object.freeze(['H317']),
+  H545: Object.freeze(['H317']),
+  H704: Object.freeze(['H317']),
+  // Digital Market -> Shikhar Tripathi (H641)
+  H641: Object.freeze(['H641']),
+  H666: Object.freeze(['H641']),
+  H386: Object.freeze(['H641']),
+  H602: Object.freeze(['H641']),
+  H689: Object.freeze(['H641']),
+});
+
+export const DEPARTMENT_HEAD_ROUTED_EMPLOYEE_IDS = Object.freeze(
+  Object.keys(DEPARTMENT_HEAD_APPROVALS)
+);
+
+export const DEPARTMENT_HEAD_FIRST_APPROVAL_EMPLOYEE_IDS = Object.freeze(
+  Object.entries(DEPARTMENT_HEAD_APPROVALS)
+    .filter(([employeeId, approverIds]) => !approverIds.includes(employeeId))
+    .map(([employeeId]) => employeeId)
+);
+
+// Heads to notify after a department-head-first approval. These are feedback
+// notices only; they do not receive the initial pending request for employees
+// listed in DEPARTMENT_HEAD_APPROVALS.
+export const DEPARTMENT_POST_APPROVAL_HEAD_EMAILS = Object.freeze({
+  Accounts: Object.freeze([
+    'rajan.kumar@premindustries.in',
+    'saurabh@premindustries.in',
+  ]),
+  'Digital Market': Object.freeze([
+    'rajan.kumar@premindustries.in',
+    'raghav.goel@premindustries.in',
+    'ishita.goel@premindustries.in',
+  ]),
+});
 
 export const DEPARTMENT_NAMES = Object.freeze([
   'Accounts',
@@ -190,12 +254,16 @@ export const normalizeDepartmentName = (value) => {
   );
 };
 
-// The single overall super admin. Every other `head` is scoped to the
-// department(s) they are mapped to via Department.heads; only this account
-// has full, org-wide visibility and the global management powers (department
-// CRUD, weekly digest, dept_head role assignment). Identified by the reserved
-// login/notification email so no DB migration is needed.
-export const SUPERADMIN_EMAIL = 'charan.f.sde@gmail.com';
+// Overall super admins. Every other `head` is scoped by
+// Employee.headNotificationEmails. Identified by reserved login/notification
+// email so no DB migration is needed.
+export const SUPERADMIN_EMAILS = Object.freeze([
+  'charan.f.sde@gmail.com',
+  'rajan.kumar@premindustries.in',
+]);
+
+// Back-compat for older imports that expect a single primary email.
+export const SUPERADMIN_EMAIL = SUPERADMIN_EMAILS[0];
 
 export const EMPLOYEE_STATUS = Object.freeze({
   ACTIVE: 'ACTIVE',
