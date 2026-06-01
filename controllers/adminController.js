@@ -37,6 +37,30 @@ const assertEmployeeInScope = (scope, employeeId, res) => {
 
 const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
 
+// Reporting heads = the Head accounts that receive and approve an employee's
+// leave (matched against Employee.headNotificationEmails by headScope). Accept
+// either an array or a comma-separated string. Returns { provided } so callers
+// can tell "leave unchanged" apart from "clear all".
+const parseReportingHeadEmails = (payload) => {
+  if (!Object.prototype.hasOwnProperty.call(payload, 'headNotificationEmails')) {
+    return { provided: false, emails: [] };
+  }
+  const raw = payload.headNotificationEmails;
+  const values = Array.isArray(raw) ? raw : String(raw || '').split(',');
+  const emails = [
+    ...new Set(
+      values
+        .map((value) => String(value || '').trim().toLowerCase())
+        .filter(Boolean)
+    ),
+  ];
+  const invalid = emails.find((email) => !EMAIL_PATTERN.test(email));
+  if (invalid) {
+    throw new Error(`"${invalid}" is not a valid reporting head email`);
+  }
+  return { provided: true, emails };
+};
+
 const normalizeEmployeeInput = (payload, { requirePassword = false } = {}) => {
   const employeeId = typeof payload.employeeId === 'string' ? payload.employeeId.trim().toUpperCase() : '';
   const name = typeof payload.name === 'string' ? payload.name.trim() : '';
@@ -421,8 +445,10 @@ export const getEmployees = asyncHandler(async (req, res) => {
 // @route POST /api/admin/employees
 export const createEmployee = asyncHandler(async (req, res) => {
   let input;
+  let reportingHeads;
   try {
     input = normalizeEmployeeInput(req.body, { requirePassword: true });
+    reportingHeads = parseReportingHeadEmails(req.body);
   } catch (error) {
     res.status(400);
     throw error;
@@ -453,12 +479,24 @@ export const createEmployee = asyncHandler(async (req, res) => {
     created = await Employee.create({
       ...input,
       role: nextRole,
+      ...(reportingHeads.provided ? { headNotificationEmails: reportingHeads.emails } : {}),
     });
   } catch (error) {
     throwEmployeeSaveError(error, res);
   }
   const employee = await Employee.findById(created._id);
   res.status(201).json(employee);
+});
+
+// @desc List Head accounts that can be assigned as an employee's reporting head
+//       for leave approval. Available to any head (the super admin included).
+// @route GET /api/admin/heads
+export const getApprovalHeads = asyncHandler(async (req, res) => {
+  const heads = await Employee.find({ role: 'head', active: true })
+    .select('_id name employeeId department email notificationEmail')
+    .sort({ name: 1 })
+    .lean();
+  res.json({ items: heads });
 });
 
 // @desc Employee detail with leaves
@@ -488,8 +526,10 @@ export const updateEmployee = asyncHandler(async (req, res) => {
   }
 
   let input;
+  let reportingHeads;
   try {
     input = normalizeEmployeeInput(req.body);
+    reportingHeads = parseReportingHeadEmails(req.body);
   } catch (error) {
     res.status(400);
     throw error;
@@ -547,6 +587,9 @@ export const updateEmployee = asyncHandler(async (req, res) => {
   employee.designation = input.designation;
   employee.role = scope.isSuper && input.role ? input.role : employee.role;
   if (input.joiningDate) employee.joiningDate = input.joiningDate;
+  // Reporting heads drive leave-approval routing. Only overwrite when the
+  // caller explicitly sent the field so unrelated edits don't clear it.
+  if (reportingHeads.provided) employee.headNotificationEmails = reportingHeads.emails;
   try {
     await employee.save();
   } catch (error) {

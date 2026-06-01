@@ -5,6 +5,7 @@ import {
   exportLeaves,
   updateLeaveStatus,
   getEmployees,
+  getApprovalHeads,
   createEmployee,
   getEmployeeDetail,
   updateEmployee,
@@ -24,6 +25,7 @@ router.get('/leaves', getAllLeaves);
 router.post('/leaves', applyLeaveOnBehalf);
 router.patch('/leaves/:id', updateLeaveStatus);
 router.get('/employees', getEmployees);
+router.get('/heads', getApprovalHeads);
 router.post('/employees', createEmployee);
 router.get('/employees/:id', getEmployeeDetail);
 router.patch('/employees/:id', updateEmployee);
