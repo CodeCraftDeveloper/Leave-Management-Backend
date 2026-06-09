@@ -15,8 +15,10 @@ import { leaveTypeLabel } from '../utils/leaveTypes.js';
 import { isSuperAdmin, resolveHeadScope, scopeAllowsDepartment } from '../utils/headScope.js';
 import { normalizeDepartmentName, SUPERADMIN_EMAILS } from '../utils/constants.js';
 import { listPostApprovalNoticeHeadsForEmployee } from '../utils/approverResolver.js';
+import { isBeforeTodayIST } from '../utils/dateHelpers.js';
 
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+const isPastLeave = (leave) => isBeforeTodayIST(leave?.endDate);
 
 // Build the Mongo filter for leave rows that `req.user` is allowed to review.
 // head:        employees whose row routes to the head's email.
@@ -394,6 +396,11 @@ export const cancelLeave = asyncHandler(async (req, res) => {
   if (leave.status !== 'approved') {
     res.status(400);
     throw new Error(`Only approved leaves can be cancelled (this one is ${leave.status})`);
+  }
+
+  if (isPastLeave(leave)) {
+    res.status(400);
+    throw new Error('Past approved leaves cannot be cancelled by Heads');
   }
 
   // Remember the original approver before we overwrite the audit fields so the

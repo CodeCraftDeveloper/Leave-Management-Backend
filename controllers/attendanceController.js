@@ -26,7 +26,7 @@ export const checkIn = asyncHandler(async (req, res) => {
   if (!geo.allowed) {
     res.status(403);
     throw new Error(
-      `You must be at the office to check in. You are approximately ${geo.distance}m away (allowed radius: ${geo.radius}m).`
+      `You must be inside the approved office area to check in. You are approximately ${geo.boundaryDistance}m outside the allowed boundary.`
     );
   }
 
@@ -73,7 +73,7 @@ export const checkOut = asyncHandler(async (req, res) => {
   if (!geo.allowed) {
     res.status(403);
     throw new Error(
-      `You must be at the office to check out. You are approximately ${geo.distance}m away (allowed radius: ${geo.radius}m).`
+      `You must be inside the approved office area to check out. You are approximately ${geo.boundaryDistance}m outside the allowed boundary.`
     );
   }
 
