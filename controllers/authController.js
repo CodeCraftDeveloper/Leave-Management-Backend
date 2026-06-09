@@ -11,6 +11,7 @@ const OTP_TTL_MINUTES = 15;
 const OTP_MAX_ATTEMPTS = 5;
 
 const generateOtp = () => String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+const publicRole = (role) => (role === 'dept_head' ? 'employee' : role);
 
 const sanitize = (u) => ({
   _id: u._id,
@@ -20,7 +21,7 @@ const sanitize = (u) => ({
   phone: u.phone,
   department: u.department,
   designation: u.designation,
-  role: u.role,
+  role: publicRole(u.role),
   // Only the reserved super-admin head has org-wide visibility; every other
   // head is scoped to their mapped department(s). The client/mobile apps use
   // this to gate super-admin-only controls.
@@ -71,6 +72,10 @@ export const registerEmployee = asyncHandler(async (req, res) => {
     res.status(400);
     throw new Error('Employee already exists');
   }
+  if (role && role !== 'employee') {
+    res.status(400);
+    throw new Error('Self-registration can only create employee accounts');
+  }
   const user = await Employee.create({
     employeeId,
     name,
@@ -79,7 +84,7 @@ export const registerEmployee = asyncHandler(async (req, res) => {
     department: normalizeDepartmentName(department),
     designation,
     phone,
-    role: role || 'employee',
+    role: 'employee',
   });
   res.status(201).json({ user: sanitize(user), token: generateToken(user._id, user.role) });
 });

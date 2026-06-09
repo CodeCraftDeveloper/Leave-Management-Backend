@@ -117,8 +117,7 @@ export const applyLeave = asyncHandler(async (req, res) => {
 
   const attachment = req.file ? `/uploads/${req.file.filename}` : '';
 
-  // Resolve the approver from the hybrid routing layer: listed exceptions go
-  // to a department head first, everyone else goes to the Excel Head emails.
+  // Resolve the approver from the employee's Head email routing.
   const approver = await resolveApprover(req.user);
   if (!approver) {
     res.status(503);
@@ -145,8 +144,7 @@ export const applyLeave = asyncHandler(async (req, res) => {
     type: 'info',
   });
 
-  // Notify every initial reviewer. Department-head-first employees only notify
-  // their mapped department head here; Head feedback notices happen after approval.
+  // Notify every assigned Head reviewer.
   const reviewers = await listApprovalHeadsForEmployee(req.user, { excludeId: req.user._id });
   const reviewerNotifications = reviewers
     .filter((r) => r && r._id)
@@ -192,7 +190,7 @@ export const getLeaveById = asyncHandler(async (req, res) => {
   // routed to their head email; employees see only their own.
   const isOwner = leave.employee._id.toString() === req.user._id.toString();
   let isHead = false;
-  if (['head', 'dept_head'].includes(req.user.role)) {
+  if (req.user.role === 'head') {
     const scope = await resolveHeadScope(req.user);
     isHead = scope.employeeIds === null || scope.employeeIds.map(String).includes(String(leave.employee._id));
   }
@@ -269,7 +267,7 @@ export const getCalendarLeaves = asyncHandler(async (req, res) => {
   const filter = { status: 'approved' };
   // Scope: super admin with ?all=1 sees everyone; a scoped head sees employees
   // routed to their head email; everyone else sees only their own.
-  if (all && ['head', 'dept_head'].includes(req.user.role)) {
+  if (all && req.user.role === 'head') {
     const scope = await resolveHeadScope(req.user);
     if (!scope.isSuper) filter.employee = { $in: scope.employeeIds };
   } else {

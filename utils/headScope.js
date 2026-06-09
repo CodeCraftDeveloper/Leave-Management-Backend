@@ -1,9 +1,5 @@
 import Employee from '../models/Employee.js';
-import {
-  DEPARTMENT_HEAD_APPROVALS,
-  DEPARTMENT_HEAD_FIRST_APPROVAL_EMPLOYEE_IDS,
-  SUPERADMIN_EMAILS,
-} from './constants.js';
+import { SUPERADMIN_EMAILS } from './constants.js';
 
 // Heads are employee-scoped reviewers: each `head` only sees and acts on
 // employees whose headNotificationEmails contain that head's login or
@@ -30,34 +26,15 @@ export const headEmailsForUser = (user) => [
 
 const employeeFilterForHead = (user) => {
   const emails = headEmailsForUser(user);
-  const departmentHeadEmployeeId = String(user?.employeeId || '').trim().toUpperCase();
-  const departmentHeadRoutedEmployeeIds = Object.entries(DEPARTMENT_HEAD_APPROVALS)
-    .filter(([, approverIds]) => approverIds.includes(departmentHeadEmployeeId))
-    .map(([employeeId]) => employeeId)
-    .filter((employeeId) => employeeId !== departmentHeadEmployeeId);
-
-  const visibilityRules = [];
-  if (emails.length) {
-    visibilityRules.push({
-      headNotificationEmails: { $in: emails },
-      employeeId: { $nin: DEPARTMENT_HEAD_FIRST_APPROVAL_EMPLOYEE_IDS },
-    });
-  }
-  if (departmentHeadRoutedEmployeeIds.length) {
-    visibilityRules.push({ employeeId: { $in: departmentHeadRoutedEmployeeIds } });
-  }
-
-  if (!visibilityRules.length) return { _id: null };
+  if (!emails.length) return { _id: null };
   return {
     active: true,
     role: { $in: ['employee', 'dept_head'] },
-    $or: visibilityRules,
+    headNotificationEmails: { $in: emails },
   };
 };
 
-// Names of the departments a head oversees through routed employees. Kept for
-// existing dashboard and department screens, but it is no longer the approval
-// authority.
+// Names of the departments a head oversees through employees routed to them.
 export const departmentsForHead = async (user) => {
   if (!user?._id) return [];
   if (isSuperAdmin(user)) {

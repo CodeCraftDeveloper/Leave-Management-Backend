@@ -1,10 +1,7 @@
 import asyncHandler from 'express-async-handler';
 import Department from '../models/Department.js';
 import Employee from '../models/Employee.js';
-import {
-  syncEmployeeRoles,
-  renameDepartmentMembers,
-} from '../services/departmentSyncService.js';
+import { renameDepartmentMembers } from '../services/departmentSyncService.js';
 import { isSuperAdmin, departmentsForHead, resolveHeadScope } from '../utils/headScope.js';
 import { normalizeDepartmentName, SUPERADMIN_EMAILS } from '../utils/constants.js';
 
@@ -98,7 +95,7 @@ export const createDepartment = asyncHandler(async (req, res) => {
     const valid = await Employee.countDocuments({
       _id: { $in: headIds },
       active: true,
-      role: { $in: ['employee', 'dept_head', 'head'] },
+      role: { $in: ['employee', 'head'] },
     });
     if (valid !== headIds.length) {
       res.status(400);
@@ -114,8 +111,6 @@ export const createDepartment = asyncHandler(async (req, res) => {
   }
 
   const department = await Department.create({ name, code, description, heads: headIds });
-  if (headIds.length) await syncEmployeeRoles(name, headIds);
-
   const populated = await Department.findById(department._id).populate(
     'heads',
     'name employeeId email role department active'
@@ -162,7 +157,7 @@ export const updateDepartment = asyncHandler(async (req, res) => {
     const valid = await Employee.countDocuments({
       _id: { $in: req.body.heads },
       active: true,
-      role: { $in: ['employee', 'dept_head', 'head'] },
+      role: { $in: ['employee', 'head'] },
     });
     if (valid !== req.body.heads.length) {
       res.status(400);
@@ -176,8 +171,6 @@ export const updateDepartment = asyncHandler(async (req, res) => {
   await department.save();
 
   if (nextName !== previousName) await renameDepartmentMembers(previousName, nextName);
-  if (headsChanged) await syncEmployeeRoles(nextName, department.heads);
-
   const populated = await Department.findById(department._id).populate(
     'heads',
     'name employeeId email role department active'
@@ -207,8 +200,6 @@ export const deleteDepartment = asyncHandler(async (req, res) => {
     );
   }
 
-  // Demote any lingering dept_heads that referenced this department.
-  await syncEmployeeRoles(department.name, []);
   department.active = false;
   department.heads = [];
   await department.save();
@@ -231,9 +222,8 @@ export const getDepartment = asyncHandler(async (req, res) => {
   await assertCanManageDepartment(res, req.user, department.name);
   const scope = await resolveHeadScope(req.user);
 
-  // Members are the staff who *belong* to the department (employees +
-  // the single department head). Overseeing `head` accounts are surfaced
-  // separately via department.heads, not as members.
+  // Members are the staff who belong to the department. Head accounts are
+  // surfaced separately via department.heads, not as members.
   const memberFilter = {
     department: department.name,
     active: true,
@@ -267,10 +257,9 @@ export const getDepartment = asyncHandler(async (req, res) => {
     .select(memberSelect)
     .lean();
 
-  const departmentHead = members.find((m) => m.role === 'dept_head') || null;
   const headGroup = (department.heads || []).filter((h) => h.role === 'head');
 
-  res.json({ department, members, availableEmployees, departmentHead, headGroup });
+  res.json({ department, members, availableEmployees, headGroup });
 });
 
 // @desc Add an existing employee to a department (membership edit only — no
@@ -298,8 +287,7 @@ export const addMember = asyncHandler(async (req, res) => {
     throw new Error(`${employee.name} is already in ${department.name}`);
   }
 
-  // A department head moving to another department reverts to a plain member —
-  // they can be re-promoted in their new home.
+  // Legacy department-head records become plain employees when moved.
   if (employee.role === 'dept_head') {
     await Department.updateMany({ heads: employee._id }, { $pull: { heads: employee._id } });
     employee.role = 'employee';
@@ -331,8 +319,7 @@ export const removeMember = asyncHandler(async (req, res) => {
     throw new Error('The super admin cannot be removed from a department');
   }
 
-  // Demote a department head being pulled out so the department isn't left
-  // pointing at an outside approver.
+  // Legacy department-head records become plain employees when removed.
   if (employee.role === 'dept_head') {
     await Department.updateOne({ _id: department._id }, { $pull: { heads: employee._id } });
     employee.role = 'employee';
@@ -343,55 +330,7 @@ export const removeMember = asyncHandler(async (req, res) => {
   res.json({ message: `${employee.name} removed from ${department.name}`, employee });
 });
 
-// @desc Set (or clear) the single department head. Exactly one dept_head per
-//       department: promoting one demotes any previous holder.
-// @route PATCH /api/manage/departments/:id/department-head
-export const setDepartmentHead = asyncHandler(async (req, res) => {
-  const department = await Department.findById(req.params.id);
-  if (!department || !department.active) {
-    res.status(404);
-    throw new Error('Department not found');
-  }
-  await assertCanManageDepartment(res, req.user, department.name);
-
-  const { employeeId } = req.body;
-  if (employeeId) {
-    const candidate = await Employee.findOne({
-      _id: employeeId,
-      active: true,
-      role: { $in: ['employee', 'dept_head'] },
-    });
-    if (!candidate) {
-      res.status(400);
-      throw new Error('Choose an active employee from this organisation');
-    }
-  }
-
-  // syncEmployeeRoles demotes every other dept_head in this department and
-  // promotes the chosen one (pinning their department), in one shot.
-  await syncEmployeeRoles(department.name, employeeId ? [employeeId] : []);
-
-  // Rebuild heads[] = overseeing heads (role head) + the single new dept head.
-  const retainedHeads = await Employee.find({
-    _id: { $in: department.heads },
-    role: 'head',
-  }).select('_id');
-  department.heads = retainedHeads.map((h) => h._id);
-  if (employeeId) department.heads.push(employeeId);
-  await department.save();
-
-  const populated = await Department.findById(department._id).populate(
-    'heads',
-    'name employeeId email role department active'
-  );
-  res.json({
-    message: employeeId ? 'Department head assigned' : 'Department head cleared',
-    department: populated,
-  });
-});
-
-// @desc Set the overall Heads group for a department (role `head`, scoped to
-//       this department). Adding grants the head role; removing revokes it
+// @desc Set the Heads group for a department. Adding grants the head role; removing revokes it
 //       unless the person still heads another department.
 // @route PATCH /api/manage/departments/:id/heads-group
 export const setHeadsGroup = asyncHandler(async (req, res) => {
@@ -416,13 +355,11 @@ export const setHeadsGroup = asyncHandler(async (req, res) => {
     );
   }
 
-  // Who is currently an overseeing head on this department.
+  // Who is currently a Head on this department.
   const currentHeads = await Employee.find({ _id: { $in: department.heads }, role: 'head' }).select('_id email notificationEmail');
   const removed = currentHeads.filter((h) => !nextIds.includes(String(h._id)));
 
-  // Rebuild heads[] = single dept head (if any) + the new head group.
-  const deptHead = await Employee.find({ _id: { $in: department.heads }, role: 'dept_head' }).select('_id');
-  department.heads = [...deptHead.map((d) => d._id), ...nextIds];
+  department.heads = nextIds;
   await department.save();
 
   // Revoke the head role from anyone removed who no longer heads anything else.

@@ -1,9 +1,4 @@
 import Employee from '../models/Employee.js';
-import {
-  DEPARTMENT_HEAD_APPROVALS,
-  DEPARTMENT_POST_APPROVAL_HEAD_EMAILS,
-  normalizeDepartmentName,
-} from './constants.js';
 
 const HEAD_FIELDS = '_id name email notificationEmail employeeId department role';
 
@@ -17,13 +12,7 @@ const normalizedEmails = (values = []) => [
 
 const approvalEmailsForEmployee = (employee) => normalizedEmails(employee?.headNotificationEmails || []);
 
-const employeeIdOf = (employee) => String(employee?.employeeId || '').trim().toUpperCase();
-
-const departmentHeadIdsForEmployee = (employee) =>
-  DEPARTMENT_HEAD_APPROVALS[employeeIdOf(employee)] || [];
-
-export const isDepartmentHeadRoutedEmployee = (employee) =>
-  departmentHeadIdsForEmployee(employee).length > 0;
+export const isDepartmentHeadRoutedEmployee = () => false;
 
 const displayNameFromEmail = (email) => {
   const localPart = String(email || '').split('@')[0] || 'head';
@@ -71,19 +60,7 @@ const findHeadsByEmails = async (emails, { excludeId, excludeEmails = [], includ
   return [...heads, ...synthetic];
 };
 
-export const listDepartmentHeadsForEmployee = async (employee, { excludeId } = {}) => {
-  const employeeIds = departmentHeadIdsForEmployee(employee);
-  if (!employeeIds.length) return [];
-
-  const filter = {
-    active: true,
-    role: 'dept_head',
-    employeeId: { $in: employeeIds },
-  };
-  if (excludeId) filter._id = { $ne: excludeId };
-
-  return Employee.find(filter).select(HEAD_FIELDS).lean();
-};
+export const listDepartmentHeadsForEmployee = async () => [];
 
 export const listDirectApprovalHeadsForEmployee = async (employee, { excludeId } = {}) => {
   const emails = approvalEmailsForEmployee(employee);
@@ -91,11 +68,6 @@ export const listDirectApprovalHeadsForEmployee = async (employee, { excludeId }
 };
 
 export const listApprovalHeadsForEmployee = async (employee, { excludeId } = {}) => {
-  if (isDepartmentHeadRoutedEmployee(employee)) {
-    const departmentHeads = await listDepartmentHeadsForEmployee(employee, { excludeId });
-    if (departmentHeads.length) return departmentHeads;
-  }
-
   const emails = approvalEmailsForEmployee(employee);
   if (!emails.length) return [];
 
@@ -103,12 +75,6 @@ export const listApprovalHeadsForEmployee = async (employee, { excludeId } = {})
 };
 
 export const listPostApprovalNoticeHeadsForEmployee = async (employee, { excludeId } = {}) => {
-  if (isDepartmentHeadRoutedEmployee(employee)) {
-    const department = normalizeDepartmentName(employee?.department);
-    const emails = DEPARTMENT_POST_APPROVAL_HEAD_EMAILS[department] || approvalEmailsForEmployee(employee);
-    return findHeadsByEmails(emails, { excludeId, includeSynthetic: true });
-  }
-
   return findHeadsByEmails(approvalEmailsForEmployee(employee), {
     excludeId,
     includeSynthetic: true,

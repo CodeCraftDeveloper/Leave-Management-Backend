@@ -11,7 +11,7 @@ import Leave from './models/Leave.js';
 import Attendance from './models/Attendance.js';
 import Notification from './models/Notification.js';
 import Holiday from './models/Holiday.js';
-import { DEPARTMENT_HEAD_EMPLOYEE_IDS, normalizeDepartmentName } from './utils/constants.js';
+import { normalizeDepartmentName } from './utils/constants.js';
 
 dotenv.config();
 
@@ -493,7 +493,7 @@ const assertUniqueEmployeeIds = (entries) => {
   }
 };
 
-const validRoles = new Set(['employee', 'dept_head', 'head', 'hr']);
+const validRoles = new Set(['employee', 'head', 'hr']);
 
 const buildHeadSeeds = (roster) => {
   const headEmails = new Set(DEFAULT_HEAD_EMAILS.map(normalizeEmail).filter(Boolean));
@@ -724,12 +724,7 @@ const run = async () => {
   const employeeById = new Map();
   for (const entry of roster) {
     const explicitRole = normalizeCell(entry.role);
-    const isListedDepartmentHead = DEPARTMENT_HEAD_EMPLOYEE_IDS.includes(entry.employeeId);
-    const nextRole = isListedDepartmentHead
-      ? 'dept_head'
-      : validRoles.has(explicitRole) && explicitRole !== 'dept_head'
-        ? explicitRole
-        : 'employee';
+    const nextRole = validRoles.has(explicitRole) ? explicitRole : 'employee';
     const doc = {
       employeeId: entry.employeeId,
       name: titleCase(entry.name),

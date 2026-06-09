@@ -97,7 +97,7 @@ export const leaveReversedTemplate = ({ recipientName, employee, leave, reversed
     </p>
     ${detailsTable(leave)}
     ${leave.adminComment ? `<p><b>Reason:</b> ${leave.adminComment}</p>` : ''}
-    <p style="font-size:13px;color:#6b7280;">The leave status is now <b>REJECTED</b>. Please reach out to the head if you need clarification.</p>
+    <p style="font-size:13px;color:#6b7280;">The leave status is now <b>${(leave.status || 'cancelled').toUpperCase()}</b>. Please reach out to the head if you need clarification.</p>
   `);
 
 export const weeklyHeadDigestTemplate = ({ head, weekStart, weekEnd, leaves }) => {

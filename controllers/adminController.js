@@ -12,10 +12,11 @@ import { sendLeaveStatusEmail } from '../services/emailService.js';
 import { onLeaveApproved } from '../services/leaveLifecycleService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
 import { resolveHeadScope, intersectWithScope, scopeAllowsDepartment } from '../utils/headScope.js';
-import { DEPARTMENT_HEAD_EMPLOYEE_IDS, normalizeDepartmentName } from '../utils/constants.js';
+import { normalizeDepartmentName } from '../utils/constants.js';
 
 const STAFF_ROLES = ['employee', 'dept_head'];
 const SUPER_ADMIN_MANAGED_ROLES = ['employee', 'dept_head', 'head'];
+const ASSIGNABLE_ROLES = ['employee', 'head'];
 
 // Guard: legacy department screens still use department visibility, but leave
 // approval itself must be employee-routed through headNotificationEmails.
@@ -94,7 +95,7 @@ const normalizeEmployeeInput = (payload, { requirePassword = false } = {}) => {
     designation,
     password,
     joiningDate,
-    role: SUPER_ADMIN_MANAGED_ROLES.includes(role) ? role : undefined,
+    role: ASSIGNABLE_ROLES.includes(role) ? role : undefined,
   };
 };
 
@@ -461,10 +462,6 @@ export const createEmployee = asyncHandler(async (req, res) => {
     res.status(403);
     throw new Error('Only the super admin can create Head accounts');
   }
-  if (nextRole === 'dept_head' && !DEPARTMENT_HEAD_EMPLOYEE_IDS.includes(input.employeeId)) {
-    res.status(400);
-    throw new Error('Department-head role is only allowed for the configured serial 1-19 employees');
-  }
   assertDepartmentInScope(scope, input.department, res);
 
   try {
@@ -540,11 +537,6 @@ export const updateEmployee = asyncHandler(async (req, res) => {
     res.status(403);
     throw new Error('Only the super admin can create or edit Head accounts');
   }
-  if (input.role === 'dept_head' && !DEPARTMENT_HEAD_EMPLOYEE_IDS.includes(input.employeeId)) {
-    res.status(400);
-    throw new Error('Department-head role is only allowed for the configured serial 1-19 employees');
-  }
-
   const managedRoles = scope.isSuper ? SUPER_ADMIN_MANAGED_ROLES : STAFF_ROLES;
   const employee = await Employee.findOne({
     _id: req.params.id,

@@ -3,18 +3,22 @@ import Employee from '../models/Employee.js';
 import { normalizeDepartmentName } from '../utils/constants.js';
 
 // One-shot backfill: makes sure every distinct Employee.department string has
-// a Department doc, and that every existing dept_head is listed under their
-// department. Idempotent — safe to call on every boot.
+// a Department doc and demotes legacy department-head records.
 export const backfillDepartments = async () => {
   const rawDepartmentNames = (await Employee.distinct('department', { active: true }))
     .map((name) => (typeof name === 'string' ? name.trim() : ''))
     .filter(Boolean);
   const departmentNames = [...new Set(rawDepartmentNames.map(normalizeDepartmentName).filter(Boolean))];
 
-  if (!departmentNames.length) return { created: 0, updatedHeads: 0 };
+  if (!departmentNames.length) return { created: 0, updatedHeads: 0, demotedLegacyDepartmentHeads: 0 };
 
   let created = 0;
   let updatedHeads = 0;
+  const demoteResult = await Employee.updateMany(
+    { role: 'dept_head' },
+    { $set: { role: 'employee' } }
+  );
+  const demotedLegacyDepartmentHeads = demoteResult.modifiedCount ?? 0;
 
   for (const name of departmentNames) {
     const aliases = rawDepartmentNames.filter((rawName) => normalizeDepartmentName(rawName) === name);
@@ -32,57 +36,26 @@ export const backfillDepartments = async () => {
     }
 
     const heads = await Employee.find({
-      role: 'dept_head',
+      _id: { $in: dept.heads || [] },
+      role: 'head',
       active: true,
-      department: name,
     }).select('_id');
 
-    const existing = new Set((dept.heads || []).map(String));
-    const next = new Set([...existing, ...heads.map((h) => String(h._id))]);
-    if (next.size !== existing.size) {
-      dept.heads = [...next];
+    if (heads.length !== (dept.heads || []).length) {
+      dept.heads = heads.map((head) => head._id);
       await dept.save();
       updatedHeads += 1;
     }
   }
 
-  return { created, updatedHeads };
+  return { created, updatedHeads, demotedLegacyDepartmentHeads };
 };
 
 // Keep the legacy Employee.role flag and Employee.department string in sync
 // with a department's heads list. Used by the department controller whenever
 // the heads list is mutated.
 export const syncEmployeeRoles = async (departmentName, headIds = []) => {
-  const normalizedDepartmentName = normalizeDepartmentName(departmentName);
-  const headIdStrings = headIds.map(String);
-  const selectedAssignableHeads = headIdStrings.length
-    ? await Employee.find({
-        _id: { $in: headIdStrings },
-        active: true,
-        role: { $in: ['employee', 'dept_head'] },
-      }).select('_id')
-    : [];
-  const assignableHeadIdStrings = selectedAssignableHeads.map((employee) => String(employee._id));
-
-  // Demote only employee-level department heads. Top-level `head` accounts can
-  // be mapped to many departments and must keep their global/scoped head role.
-  await Employee.updateMany(
-    {
-      role: 'dept_head',
-      department: normalizedDepartmentName,
-      _id: { $nin: assignableHeadIdStrings },
-    },
-    { $set: { role: 'employee' } }
-  );
-
-  // Promote only regular employees selected as department reviewers. Do not
-  // pin top-level `head` accounts to this department.
-  if (assignableHeadIdStrings.length) {
-    await Employee.updateMany(
-      { _id: { $in: assignableHeadIdStrings } },
-      { $set: { role: 'dept_head', department: normalizedDepartmentName } }
-    );
-  }
+  return { departmentName: normalizeDepartmentName(departmentName), headIds, retired: true };
 };
 
 // Propagate a department rename to every employee assigned to the old name.

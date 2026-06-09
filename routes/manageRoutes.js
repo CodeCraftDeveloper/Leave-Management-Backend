@@ -5,8 +5,8 @@ import {
   exportReviewQueue,
   getTeam,
   actionLeave,
+  cancelLeave,
   createEmployee,
-  updateEmployeeRole,
   getWeeklyDigestPreview,
   sendWeeklyDigestNow,
 } from '../controllers/manageController.js';
@@ -27,6 +27,7 @@ router.use(protect, reviewerOnly);
 
 router.get('/leaves/export', exportReviewQueue);
 router.get('/leaves', getReviewQueue);
+router.patch('/leaves/:id/cancel', cancelLeave);
 router.patch('/leaves/:id', actionLeave);
 router.get('/team', getTeam);
 // Heads (and the super admin) can add brand-new employees to the global roster.
@@ -34,7 +35,6 @@ router.get('/team', getTeam);
 router.post('/employees', headOrSuperAdmin, createEmployee);
 // Global powers — reserved for the super admin since ordinary heads are now
 // department-scoped.
-router.patch('/employees/:id/role', superAdminOnly, updateEmployeeRole);
 router.get('/weekly-digest', superAdminOnly, getWeeklyDigestPreview);
 router.post('/weekly-digest/send', superAdminOnly, sendWeeklyDigestNow);
 

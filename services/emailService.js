@@ -126,9 +126,7 @@ export const sendVerificationCodeEmail = async ({ employee, code, expiresInMinut
   });
 };
 
-// Notify the employee's peer Head group after an approval. For department-head
-// first routes this goes to the department feedback Heads; for direct Head
-// routes it goes to the other mapped Head emails.
+// Notify other mapped Heads after an approval.
 export const sendLeaveApprovedHeadNotice = async ({ heads, employee, leave, approvedBy }) => {
   const tasks = heads
     .map((head) => ({ head, to: notificationAddress(head) }))
@@ -147,9 +145,8 @@ export const sendLeaveApprovedHeadNotice = async ({ heads, employee, leave, appr
   return Promise.all(tasks);
 };
 
-// Sent when a head overturns a previously approved leave. Employee learns
-// their leave is off; the original dept_head learns their approval was
-// overruled (so they can update the team).
+// Sent when a Head overturns a previously approved leave. The employee and
+// original approver are notified.
 export const sendLeaveReversedEmail = async ({ employee, originalApprover, leave, reversedBy }) => {
   const tasks = [];
   if (employee.email) {

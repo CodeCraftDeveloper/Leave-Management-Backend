@@ -7,8 +7,9 @@ import { assessDepartmentStaffing } from '../utils/staffingCoverage.js';
 import {
   sendLeaveApprovedHeadNotice,
   sendLeaveStatusEmail,
+  sendLeaveReversedEmail,
 } from '../services/emailService.js';
-import { onLeaveApproved } from '../services/leaveLifecycleService.js';
+import { onLeaveApproved, onApprovedLeaveCancelled } from '../services/leaveLifecycleService.js';
 import { getApprovedLeavesForWeek, sendWeeklyHeadDigest } from '../services/weeklyDigestService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
 import { isSuperAdmin, resolveHeadScope, scopeAllowsDepartment } from '../utils/headScope.js';
@@ -21,7 +22,7 @@ const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 // head:        employees whose row routes to the head's email.
 // super admin: full organisation visibility.
 const scopedLeaveFilter = async (user) => {
-  if (['head', 'dept_head'].includes(user.role)) {
+  if (user.role === 'head') {
     const scope = await resolveHeadScope(user);
     if (scope.isSuper) return {};
     return { employee: { $in: scope.employeeIds } };
@@ -157,7 +158,7 @@ export const exportReviewQueue = asyncHandler(async (req, res) => {
     sheet.addRow({
       employeeId: leave.employee?.employeeId || '',
       name: leave.employee?.name || '',
-      role: leave.employee?.role === 'dept_head' ? 'Department Head' : leave.employee?.role === 'head' ? 'Head' : 'Employee',
+      role: leave.employee?.role === 'head' ? 'Head' : 'Employee',
       department: leave.employee?.department || '',
       designation: leave.employee?.designation || '',
       email: leave.employee?.email || '',
@@ -202,7 +203,7 @@ export const getTeam = asyncHandler(async (req, res) => {
   const { search, department, includeHeads } = req.query;
 
   let filter;
-  if (['head', 'dept_head'].includes(req.user.role)) {
+  if (req.user.role === 'head') {
     // Scoped heads only see employees routed to their approval email.
     const scope = await resolveHeadScope(req.user);
     const roles = scope.isSuper && String(includeHeads) === 'true'
@@ -366,6 +367,70 @@ export const actionLeave = asyncHandler(async (req, res) => {
   res.json(leave);
 });
 
+// @desc Cancel (overturn) a leave I'm allowed to review — used when a head
+//       needs to reverse a previously approved leave. Cleans the attendance
+//       stamps, records who actioned it, notifies the employee, and emails both
+//       the employee and the original approver.
+// @route PATCH /api/manage/leaves/:id/cancel
+export const cancelLeave = asyncHandler(async (req, res) => {
+  const adminComment = typeof req.body.adminComment === 'string' ? req.body.adminComment.trim() : '';
+
+  const leave = await Leave.findById(req.params.id)
+    .populate('employee')
+    .populate('actionedBy', 'name email notificationEmail employeeId')
+    .populate('approver', 'name email notificationEmail employeeId');
+  if (!leave) {
+    res.status(404);
+    throw new Error('Leave not found');
+  }
+
+  const scope = await resolveHeadScope(req.user);
+  const canAction = scope.employeeIds === null || scope.employeeIds.map(String).includes(String(leave.employee?._id));
+  if (!canAction) {
+    res.status(403);
+    throw new Error('You cannot action this leave');
+  }
+
+  if (leave.status !== 'approved') {
+    res.status(400);
+    throw new Error(`Only approved leaves can be cancelled (this one is ${leave.status})`);
+  }
+
+  // Remember the original approver before we overwrite the audit fields so the
+  // reversal email can notify the person whose approval was overturned.
+  const originalApprover = leave.actionedBy || leave.approver || null;
+
+  leave.status = 'cancelled';
+  leave.adminComment = adminComment;
+  leave.actionedBy = req.user._id;
+  leave.actionedAt = new Date();
+  await leave.save();
+
+  // Clear the ON_LEAVE / HALF_DAY attendance stamps created at approval time.
+  try {
+    await onApprovedLeaveCancelled(leave);
+  } catch (err) {
+    console.error('Leave cancellation cleanup failed:', err.message);
+  }
+
+  await Notification.create({
+    recipient: leave.employee._id,
+    title: 'Leave Cancelled',
+    message: `Your previously approved ${leaveTypeLabel(leave.leaveType)} has been cancelled by ${req.user.name}.${adminComment ? ' Note: ' + adminComment : ''}`,
+    type: 'error',
+    link: '/history',
+  });
+
+  await sendLeaveReversedEmail({
+    employee: leave.employee,
+    originalApprover,
+    leave,
+    reversedBy: req.user,
+  });
+
+  res.json(leave);
+});
+
 // @desc Create a new employee in the global database and assign their
 //       department. Heads can only create into a department they oversee; the
 //       super admin can target any department.
@@ -426,13 +491,6 @@ export const createEmployee = asyncHandler(async (req, res) => {
   const safe = employee.toObject();
   delete safe.password;
   res.status(201).json({ message: `${name} added to ${department}`, employee: safe });
-});
-
-// @desc Legacy department-head role assignment (retired)
-// @route PATCH /api/manage/employees/:id/role
-export const updateEmployeeRole = asyncHandler(async (req, res) => {
-  res.status(410);
-  throw new Error('Department-head approval has been retired. Assign approval by employee head emails instead.');
 });
 
 // @desc Preview the approved leaves in the current weekly digest window

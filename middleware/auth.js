@@ -29,20 +29,18 @@ export const protect = asyncHandler(async (req, res, next) => {
   }
 });
 
-// Flexible role guard. Usage: router.use(authorize('head', 'dept_head'))
+// Flexible role guard. Usage: router.use(authorize('head'))
 export const authorize = (...allowed) => (req, res, next) => {
   if (req.user && allowed.includes(req.user.role)) return next();
   res.status(403);
   throw new Error('Insufficient permissions');
 };
 
-// Only the top-of-org `head` role — full org visibility, manages dept_heads,
-// handles dept_head leave approvals and system-wide settings.
+// Only the `head` role can approve leave requests and access the Head console.
 export const headOnly = authorize('head');
 
 // The single overall super admin. Heads are department-scoped, so global powers
-// — weekly digest, org-wide dept_head role assignment — are reserved for the
-// super admin alone.
+// such as weekly digest controls are reserved for the super admin alone.
 export const superAdminOnly = asyncHandler(async (req, res, next) => {
   if (req.user && isSuperAdmin(req.user)) return next();
   res.status(403);
@@ -59,7 +57,7 @@ export const headOrSuperAdmin = asyncHandler(async (req, res, next) => {
 });
 
 // Any reviewer — used for the shared management surface (My Team, review queue).
-export const reviewerOnly = authorize('head', 'dept_head');
+export const reviewerOnly = authorize('head');
 
 // Legacy guards for the payroll/salary-structure helpers that still reference
 // `hr`. Heads inherit everything the old `admin` could do.

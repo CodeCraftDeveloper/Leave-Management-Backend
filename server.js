@@ -85,9 +85,9 @@ app.listen(PORT, () =>
 startWeeklyDigestScheduler();
 backfillDepartments()
   .then((result) => {
-    if (result.created || result.updatedHeads) {
+    if (result.created || result.updatedHeads || result.demotedLegacyDepartmentHeads) {
       console.log(
-        `Department backfill: created ${result.created}, updated heads on ${result.updatedHeads}`
+        `Department backfill: created ${result.created}, updated heads on ${result.updatedHeads}, demoted legacy department heads ${result.demotedLegacyDepartmentHeads || 0}`
       );
     }
   })
