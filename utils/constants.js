@@ -261,7 +261,7 @@ export const PAYROLL_STATUS = Object.freeze({
 export const DEFAULT_SETTINGS = Object.freeze({
   workStartTime: '09:15',
   workEndTime: '18:00',
-  weekOffDays: [0], // Sunday — but Sunday work earns double pay.
+  weekOffDays: [],
   perDayMode: 'actual', // 'actual' = monthlySalary / daysInMonth.
   yearlyQuota: DEFAULT_YEARLY_QUOTA,
   monthlyFreeLeaves: 2,

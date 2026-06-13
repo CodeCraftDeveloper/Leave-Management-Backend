@@ -1,4 +1,6 @@
-export const calculateDays = (startDate, endDate, holidays = []) => {
+import { effectiveWeekOffDaysForEmployee } from './leavePolicy.js';
+
+export const calculateDays = (startDate, endDate, holidays = [], options = {}) => {
   const start = new Date(startDate);
   const end = new Date(endDate);
   start.setHours(0, 0, 0, 0);
@@ -10,10 +12,13 @@ export const calculateDays = (startDate, endDate, holidays = []) => {
 
   let count = 0;
   const current = new Date(start);
+  const weekOffDays = new Set(
+    effectiveWeekOffDaysForEmployee(options.employee || options.employeeId, options.weekOffDays)
+  );
+
   while (current <= end) {
     const dayOfWeek = current.getDay();
-    // Sunday is the weekly off day. Saturdays and holidays count as leave days.
-    const isWeeklyOff = dayOfWeek === 0;
+    const isWeeklyOff = weekOffDays.has(dayOfWeek);
 
     if (!isWeeklyOff) {
       count++;

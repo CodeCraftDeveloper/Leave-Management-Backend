@@ -9,8 +9,7 @@ const settingsSchema = new mongoose.Schema(
     // Office timing (display / informational; no late deduction applied).
     workStartTime: { type: String, default: DEFAULT_SETTINGS.workStartTime }, // "09:15"
     workEndTime: { type: String, default: DEFAULT_SETTINGS.workEndTime },     // "18:00"
-    // Days treated as week-offs. Sunday = 0 by default. Sunday work still
-    // pays double if it meets the minimum-hours threshold.
+    // Global week-offs. Sunday is employee-scoped in leavePolicy.js.
     weekOffDays: { type: [Number], default: DEFAULT_SETTINGS.weekOffDays },
     // 'actual' (default): perDay = monthlySalary / daysInMonth.
     // 'fixed30':         perDay = monthlySalary / 30.

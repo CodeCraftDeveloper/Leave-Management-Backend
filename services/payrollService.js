@@ -6,6 +6,7 @@ import Payroll from '../models/Payroll.js';
 import SalaryStructure from '../models/SalaryStructure.js';
 import Settings from '../models/Settings.js';
 import { daysInMonth, monthRange, eachDayInRange } from '../utils/dateHelpers.js';
+import { effectiveWeekOffDaysForEmployee } from '../utils/leavePolicy.js';
 
 const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
 
@@ -16,17 +17,17 @@ const otCreditDateFor = (month, year) => new Date(Date.UTC(year, month - 1, 25))
  * Pure read — no DB writes — so this also serves as the "preview" engine.
  *
  * Rules:
- *   • Sundays count as week-offs; Sunday work counts toward `sundaysWorked`
- *     IF the employee logged at least `settings.sundayMinHours` that day.
+ *   • Sunday is a working day by default. Listed Sunday-off employees still
+ *     treat Sunday as weekly off, and Sunday work can count toward OT.
  *   • Leave days falling on the month are summed into `leavesTaken`.
- *   • Sunday leaves are ignored (you can't take leave on a day off).
+ *   • Weekly-off leaves are ignored (you can't take leave on a day off).
  *   • Free leaves quota is per month; extras deduct per-day pay.
  */
 export const buildMonthlySummary = async (employee, month, year) => {
   const totalDaysInMonth = daysInMonth(year, month);
   const { start, end } = monthRange(year, month);
   const settings = await Settings.get();
-  const weekOffSet = new Set(settings.weekOffDays || [0]);
+  const weekOffSet = new Set(effectiveWeekOffDaysForEmployee(employee, settings.weekOffDays));
 
   const [attendance, approvedLeaves, holidays] = await Promise.all([
     Attendance.find({ employee: employee._id, date: { $gte: start, $lte: end } }),
