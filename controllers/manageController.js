@@ -16,8 +16,8 @@ import { isSuperAdmin, resolveHeadScope, scopeAllowsDepartment } from '../utils/
 import { normalizeDepartmentName, SUPERADMIN_EMAILS } from '../utils/constants.js';
 import { listPostApprovalNoticeHeadsForEmployee } from '../utils/approverResolver.js';
 import { isBeforeTodayIST } from '../utils/dateHelpers.js';
+import { normalizeAndValidateEmail } from '../utils/emailValidation.js';
 
-const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 const isPastLeave = (leave) => isBeforeTodayIST(leave?.endDate);
 
 // Build the Mongo filter for leave rows that `req.user` is allowed to review.
@@ -445,7 +445,11 @@ export const cancelLeave = asyncHandler(async (req, res) => {
 export const createEmployee = asyncHandler(async (req, res) => {
   const name = String(req.body.name || '').trim();
   const employeeId = String(req.body.employeeId || '').trim().toUpperCase();
-  const email = normalizeEmail(req.body.email);
+  const email = await normalizeAndValidateEmail(req.body.email, {
+    required: false,
+    label: 'email',
+    checkDns: true,
+  });
   const phone = String(req.body.phone || '').trim();
   const designation = String(req.body.designation || '').trim() || 'Employee';
   const department = normalizeDepartmentName(req.body.department) || String(req.body.department || '').trim();

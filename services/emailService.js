@@ -8,6 +8,7 @@ import {
   leaveApprovedHeadNoticeTemplate,
   leaveReversedTemplate,
 } from '../templates/emailTemplates.js';
+import { getEmailValidationError, normalizeEmail } from '../utils/emailValidation.js';
 
 let transporter;
 
@@ -44,17 +45,23 @@ const getTransporter = () => {
 
 const sendMail = async ({ to, subject, html }) => {
   try {
+    const normalizedTo = normalizeEmail(to);
+    const validationError = getEmailValidationError(normalizedTo, { label: 'recipient email' });
+    if (validationError) {
+      console.warn(`[Email-skip] Invalid recipient. To:${to} Subject:${subject} Reason:${validationError}`);
+      return { skipped: true, reason: validationError, statusCode: 400 };
+    }
     if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-      console.log(`[Email-skip] Missing SMTP auth. To:${to} Subject:${subject}`);
+      console.log(`[Email-skip] Missing SMTP auth. To:${normalizedTo} Subject:${subject}`);
       return { skipped: true };
     }
     const info = await getTransporter().sendMail({
       from: mailFrom(),
-      to,
+      to: normalizedTo,
       subject,
       html,
     });
-    console.log(`[Email-sent] To:${to} Subject:${subject} MessageId:${info.messageId}`);
+    console.log(`[Email-sent] To:${normalizedTo} Subject:${subject} MessageId:${info.messageId}`);
     return info;
   } catch (err) {
     console.error(`Email error for ${to}:`, err.message);

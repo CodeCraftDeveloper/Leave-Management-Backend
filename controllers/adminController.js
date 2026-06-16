@@ -13,6 +13,7 @@ import { onLeaveApproved } from '../services/leaveLifecycleService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
 import { resolveHeadScope, intersectWithScope, scopeAllowsDepartment } from '../utils/headScope.js';
 import { normalizeDepartmentName } from '../utils/constants.js';
+import { normalizeEmailList, validateEmailFormat } from '../utils/emailValidation.js';
 
 const STAFF_ROLES = ['employee', 'dept_head'];
 const SUPER_ADMIN_MANAGED_ROLES = ['employee', 'dept_head', 'head'];
@@ -36,8 +37,6 @@ const assertEmployeeInScope = (scope, employeeId, res) => {
   }
 };
 
-const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
-
 // Reporting heads = the Head accounts that receive and approve an employee's
 // leave (matched against Employee.headNotificationEmails by headScope). Accept
 // either an array or a comma-separated string. Returns { provided } so callers
@@ -46,26 +45,16 @@ const parseReportingHeadEmails = (payload) => {
   if (!Object.prototype.hasOwnProperty.call(payload, 'headNotificationEmails')) {
     return { provided: false, emails: [] };
   }
-  const raw = payload.headNotificationEmails;
-  const values = Array.isArray(raw) ? raw : String(raw || '').split(',');
-  const emails = [
-    ...new Set(
-      values
-        .map((value) => String(value || '').trim().toLowerCase())
-        .filter(Boolean)
-    ),
-  ];
-  const invalid = emails.find((email) => !EMAIL_PATTERN.test(email));
-  if (invalid) {
-    throw new Error(`"${invalid}" is not a valid reporting head email`);
-  }
+  const emails = normalizeEmailList(payload.headNotificationEmails, {
+    label: 'reporting head email',
+  });
   return { provided: true, emails };
 };
 
 const normalizeEmployeeInput = (payload, { requirePassword = false } = {}) => {
   const employeeId = typeof payload.employeeId === 'string' ? payload.employeeId.trim().toUpperCase() : '';
   const name = typeof payload.name === 'string' ? payload.name.trim() : '';
-  const email = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
+  const email = validateEmailFormat(payload.email, { required: false, label: 'email' });
   const phone = typeof payload.phone === 'string' ? payload.phone.trim() : '';
   const department = normalizeDepartmentName(payload.department);
   const designation = typeof payload.designation === 'string' ? payload.designation.trim() : '';
@@ -75,9 +64,6 @@ const normalizeEmployeeInput = (payload, { requirePassword = false } = {}) => {
 
   if (!employeeId || !name || !department || !designation) {
     throw new Error('Employee ID, name, department and designation are required');
-  }
-  if (email && !EMAIL_PATTERN.test(email)) {
-    throw new Error('A valid email is required');
   }
   if ((requirePassword || password) && password.length < 6) {
     throw new Error('Password must be at least 6 characters');

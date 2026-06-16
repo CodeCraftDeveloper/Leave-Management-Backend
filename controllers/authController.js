@@ -5,8 +5,8 @@ import generateToken from '../utils/generateToken.js';
 import { sendVerificationCodeEmail } from '../services/emailService.js';
 import { isSuperAdmin } from '../utils/headScope.js';
 import { normalizeDepartmentName } from '../utils/constants.js';
+import { normalizeAndValidateEmail, normalizeEmail } from '../utils/emailValidation.js';
 
-const EMAIL_PATTERN = /^\S+@\S+\.\S+$/;
 const OTP_TTL_MINUTES = 15;
 const OTP_MAX_ATTEMPTS = 5;
 
@@ -45,7 +45,7 @@ export const login = asyncHandler(async (req, res) => {
   }
   let query = {};
   if (identifier.includes('@')) {
-    query = { email: identifier.toLowerCase() };
+    query = { email: normalizeEmail(identifier) };
   } else {
     query = { employeeId: identifier.toUpperCase() };
   }
@@ -65,8 +65,12 @@ export const registerEmployee = asyncHandler(async (req, res) => {
     res.status(400);
     throw new Error('Missing required fields');
   }
+  const normalizedEmail = await normalizeAndValidateEmail(email, {
+    label: 'email',
+    checkDns: true,
+  });
   const exists = await Employee.findOne({
-    $or: [{ email: email.toLowerCase() }, { employeeId: employeeId.toUpperCase() }],
+    $or: [{ email: normalizedEmail }, { employeeId: employeeId.toUpperCase() }],
   });
   if (exists) {
     res.status(400);
@@ -79,7 +83,7 @@ export const registerEmployee = asyncHandler(async (req, res) => {
   const user = await Employee.create({
     employeeId,
     name,
-    email,
+    email: normalizedEmail,
     password,
     department: normalizeDepartmentName(department),
     designation,
@@ -102,23 +106,27 @@ const issueOtp = async (user) => {
   user.emailVerifyCode = code;
   user.emailVerifyExpires = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
   user.emailVerifyAttempts = 0;
-  await user.save();
-  await sendVerificationCodeEmail({
+  const result = await sendVerificationCodeEmail({
     employee: user,
     code,
     expiresInMinutes: OTP_TTL_MINUTES,
   });
+  if (result?.error || result?.skipped) {
+    const error = new Error(result?.reason || 'Could not send verification email. Check the address and try again.');
+    error.statusCode = result?.statusCode || 502;
+    throw error;
+  }
+  await user.save();
 };
 
 // @desc Set/update email and send a verification OTP. Sets emailVerified=false
 // until the user submits the OTP back via POST /auth/email/verify.
 // @route PUT /api/auth/email
 export const setEmail = asyncHandler(async (req, res) => {
-  const raw = (req.body?.email || '').trim().toLowerCase();
-  if (!raw || !EMAIL_PATTERN.test(raw)) {
-    res.status(400);
-    throw new Error('A valid email is required');
-  }
+  const raw = await normalizeAndValidateEmail(req.body?.email, {
+    label: 'email',
+    checkDns: true,
+  });
   const taken = await Employee.findOne({ email: raw, _id: { $ne: req.user._id } });
   if (taken) {
     res.status(409);
@@ -146,6 +154,10 @@ export const resendVerification = asyncHandler(async (req, res) => {
     res.status(400);
     throw new Error('No email on file. Set an email first.');
   }
+  await normalizeAndValidateEmail(req.user.email, {
+    label: 'email on file',
+    checkDns: true,
+  });
   if (req.user.emailVerified) {
     res.json({ message: 'Email already verified' });
     return;
