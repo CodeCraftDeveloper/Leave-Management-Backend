@@ -672,7 +672,10 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
     res.status(400);
     throw new Error('Invalid dates');
   }
-  if (isBeforeTodayIST(start)) {
+  // The super admin may backfill leaves that already happened (past dates);
+  // scoped heads can only log leave from today onward.
+  const isBackfill = scope.isSuper && isBeforeTodayIST(start);
+  if (isBeforeTodayIST(start) && !scope.isSuper) {
     res.status(400);
     throw new Error('Cannot apply leave for a past date');
   }
@@ -741,21 +744,28 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
     throw new Error('Employee already has a leave request overlapping these dates');
   }
 
-  const staffingCoverage = await assessDepartmentStaffing({
-    employee,
-    startDate: start,
-    endDate: end,
-    isHalfDay: isHalfDayBool,
-    halfDaySession: isHalfDayBool ? halfDaySession : '',
-  });
+  // Staffing coverage is a forward-looking guard (keep N on duty). For a past
+  // backfill the day has already passed, so the check is skipped entirely.
+  let staffingCoverage;
   const staffingOverride = staffingOverrideInput(req.body);
-  if (staffingCoverage.blocked && !staffingOverride.requested) {
-    return rejectStaffingLimit(res, staffingCoverage);
+  if (!isBackfill) {
+    staffingCoverage = await assessDepartmentStaffing({
+      employee,
+      startDate: start,
+      endDate: end,
+      isHalfDay: isHalfDayBool,
+      halfDaySession: isHalfDayBool ? halfDaySession : '',
+    });
+    if (staffingCoverage.blocked && !staffingOverride.requested) {
+      return rejectStaffingLimit(res, staffingCoverage);
+    }
+    if (staffingCoverage.blocked && !staffingOverride.reason) {
+      res.status(400);
+      throw new Error('A staffing override reason is required to approve this leave');
+    }
   }
-  if (staffingCoverage.blocked && !staffingOverride.reason) {
-    res.status(400);
-    throw new Error('A staffing override reason is required to approve this leave');
-  }
+
+  const staffingBlocked = Boolean(staffingCoverage?.blocked);
 
   // Create approved leave
   const leave = await Leave.create({
@@ -768,9 +778,11 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
     status: 'approved',
     actionedBy: req.user._id,
     actionedAt: new Date(),
-    adminComment: 'Applied by Head on behalf of Employee',
-    staffingOverride: staffingCoverage.blocked && staffingOverride.requested,
-    staffingOverrideReason: staffingCoverage.blocked && staffingOverride.requested ? staffingOverride.reason : '',
+    adminComment: isBackfill
+      ? 'Backfilled by Super Admin on behalf of Employee'
+      : 'Applied by Head on behalf of Employee',
+    staffingOverride: staffingBlocked && staffingOverride.requested,
+    staffingOverrideReason: staffingBlocked && staffingOverride.requested ? staffingOverride.reason : '',
     staffingSnapshot: staffingCoverage,
     isHalfDay: isHalfDayBool,
     halfDaySession: isHalfDayBool ? halfDaySession : '',
@@ -788,7 +800,9 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
   await Notification.create({
     recipient: employee._id,
     title: 'Leave Approved',
-    message: `A ${leaveTypeLabel(leaveType)} request of ${totalDays} day(s) has been logged and approved on your behalf by Head.`,
+    message: isBackfill
+      ? `A past ${leaveTypeLabel(leaveType)} of ${totalDays} day(s) has been recorded and approved on your behalf.`
+      : `A ${leaveTypeLabel(leaveType)} request of ${totalDays} day(s) has been logged and approved on your behalf by Head.`,
     type: 'success',
   });
 
