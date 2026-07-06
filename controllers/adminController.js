@@ -14,6 +14,7 @@ import { leaveTypeLabel } from '../utils/leaveTypes.js';
 import { resolveHeadScope, intersectWithScope, scopeAllowsDepartment } from '../utils/headScope.js';
 import { normalizeDepartmentName } from '../utils/constants.js';
 import { normalizeEmailList, validateEmailFormat } from '../utils/emailValidation.js';
+import { cascadeDeleteEmployee } from '../utils/cascadeDeleteEmployee.js';
 
 const STAFF_ROLES = ['employee', 'dept_head'];
 const SUPER_ADMIN_MANAGED_ROLES = ['employee', 'dept_head', 'head'];
@@ -62,8 +63,8 @@ const normalizeEmployeeInput = (payload, { requirePassword = false } = {}) => {
   const joiningDate = payload.joiningDate ? new Date(payload.joiningDate) : undefined;
   const role = typeof payload.role === 'string' ? payload.role.trim() : '';
 
-  if (!employeeId || !name || !department || !designation) {
-    throw new Error('Employee ID, name, department and designation are required');
+  if (!employeeId || !name || !department) {
+    throw new Error('Employee ID, name and department are required');
   }
   if ((requirePassword || password) && password.length < 6) {
     throw new Error('Password must be at least 6 characters');
@@ -78,7 +79,8 @@ const normalizeEmployeeInput = (payload, { requirePassword = false } = {}) => {
     email: email || undefined,
     phone,
     department,
-    designation,
+    // Optional — falls back to the schema default ('Employee') when left blank.
+    designation: designation || undefined,
     password,
     joiningDate,
     role: ASSIGNABLE_ROLES.includes(role) ? role : undefined,
@@ -581,15 +583,16 @@ export const updateEmployee = asyncHandler(async (req, res) => {
   res.json(await Employee.findById(employee._id));
 });
 
-// @desc Deactivate employee while preserving leave history
+// @desc Permanently delete an employee and every record tied to them
 // @route DELETE /api/admin/employees/:id
 export const deleteEmployee = asyncHandler(async (req, res) => {
   const scope = await resolveHeadScope(req.user);
   const managedRoles = scope.isSuper ? SUPER_ADMIN_MANAGED_ROLES : STAFF_ROLES;
+  // No `active` filter — a hard delete should also clear out any record that was
+  // previously soft-deleted (active: false) so the employee ID is fully freed.
   const employee = await Employee.findOne({
     _id: req.params.id,
     role: { $in: managedRoles },
-    active: true,
   });
   if (!employee) {
     res.status(404);
@@ -602,11 +605,11 @@ export const deleteEmployee = asyncHandler(async (req, res) => {
 
   assertEmployeeInScope(scope, employee._id, res);
 
-  employee.active = false;
-  await employee.save();
-  await Department.updateMany({ heads: employee._id }, { $pull: { heads: employee._id } });
+  // Hard delete: removes the employee and all of their leave, attendance,
+  // payroll, salary and notification records, and unlinks them everywhere.
+  const deleted = await cascadeDeleteEmployee(employee);
 
-  res.json({ message: 'Employee deleted successfully' });
+  res.json({ message: 'Employee and all associated records permanently deleted', deleted });
 });
 
 // @desc Update employee department/designation
