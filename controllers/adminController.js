@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import asyncHandler from 'express-async-handler';
 import ExcelJS from 'exceljs';
 import Leave from '../models/Leave.js';
@@ -12,7 +13,7 @@ import { sendLeaveStatusEmail } from '../services/emailService.js';
 import { onLeaveApproved } from '../services/leaveLifecycleService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
 import { resolveHeadScope, intersectWithScope, scopeAllowsDepartment } from '../utils/headScope.js';
-import { normalizeDepartmentName } from '../utils/constants.js';
+import { normalizeDepartmentName, DEPARTMENT_NAMES, SUPERADMIN_EMAILS } from '../utils/constants.js';
 import { normalizeEmailList, validateEmailFormat } from '../utils/emailValidation.js';
 import { cascadeDeleteEmployee } from '../utils/cascadeDeleteEmployee.js';
 
@@ -812,4 +813,457 @@ export const applyLeaveOnBehalf = asyncHandler(async (req, res) => {
   await sendLeaveStatusEmail({ employee, leave });
 
   res.status(201).json(leave);
+});
+
+// ---------------------------------------------------------------------------
+// Bulk employee import (Excel)
+// ---------------------------------------------------------------------------
+
+// Single source of truth for the import: drives the downloadable template, the
+// in-workbook Instructions tab, and the header-matching used while parsing.
+// `aliases` are additional header spellings accepted on upload (normalized).
+const IMPORT_COLUMNS = [
+  {
+    key: 'employeeId', header: 'Employee ID', required: true, width: 16, example: 'EMP1001',
+    description: 'Unique staff ID. Automatically uppercased. Must not already exist.',
+    aliases: ['empid', 'id', 'staffid', 'employeecode', 'code'],
+  },
+  {
+    key: 'name', header: 'Name', required: true, width: 24, example: 'Asha Menon',
+    description: 'Full name of the employee.',
+    aliases: ['fullname', 'employeename'],
+  },
+  {
+    key: 'email', header: 'Email', required: false, width: 30, example: 'asha.menon@premindustries.in',
+    description: 'Login email. Optional, but must be unique when provided.',
+    aliases: ['emailid', 'emailaddress', 'mail'],
+  },
+  {
+    key: 'phone', header: 'Phone', required: false, width: 16, example: '9876543210',
+    description: 'Contact number.',
+    aliases: ['mobile', 'phonenumber', 'contact', 'mobileno', 'contactnumber'],
+  },
+  {
+    key: 'department', header: 'Department', required: true, width: 22, example: 'Accounts',
+    description: 'Must match an existing department — see the Departments tab.',
+    aliases: ['dept', 'departmentname'],
+  },
+  {
+    key: 'designation', header: 'Designation', required: false, width: 20, example: 'Accountant',
+    description: 'Job title. Defaults to "Employee" when left blank.',
+    aliases: ['title', 'jobtitle'],
+  },
+  {
+    key: 'password', header: 'Password', required: false, width: 16, example: 'Welcome@123',
+    description: 'Initial password (min 6 chars). Auto-generated if blank — the generated value is shown in the import results.',
+    aliases: ['initialpassword', 'temppassword'],
+  },
+  {
+    key: 'joiningDate', header: 'Joining Date', required: false, width: 16, example: '2026-01-15',
+    description: 'Date of joining in YYYY-MM-DD format.',
+    aliases: ['doj', 'dateofjoining', 'joindate', 'joiningdate'],
+  },
+  {
+    key: 'role', header: 'Role', required: false, width: 12, example: 'employee',
+    description: 'employee or head. Only the super admin may create head accounts.',
+    aliases: ['userrole', 'accountrole', 'accesslevel'],
+  },
+  {
+    key: 'reportingHeadEmails', header: 'Reporting Head Emails', required: false, width: 34, example: 'head.accounts@premindustries.in',
+    description: 'Comma-separated Head routing emails that approve this employee\'s leave — must match an account on the Heads tab. When a head imports and leaves this blank, the employee routes to that head automatically.',
+    aliases: ['reportinghead', 'reportingheads', 'heademails', 'approveremails', 'approveremail', 'headnotificationemails', 'notificationemails'],
+  },
+];
+
+// Active, non-super Head accounts are the valid reporting targets an employee's
+// leave can route to (Employee.headNotificationEmails). Super admins approve
+// globally and are never a departmental reporting head, mirroring the head UI.
+// Returns the display list (canonical routing email each) plus the full set of
+// addresses accepted on import (either the login or notification email matches).
+const loadReportingHeads = async () => {
+  const docs = await Employee.find({ role: 'head', active: true })
+    .select('name employeeId email notificationEmail')
+    .sort({ name: 1 })
+    .lean();
+  const heads = [];
+  const validEmails = new Set();
+  for (const doc of docs) {
+    const routing = String(doc.notificationEmail || doc.email || '').toLowerCase();
+    if (!routing || SUPERADMIN_EMAILS.includes(routing)) continue;
+    heads.push({ name: doc.name, employeeId: doc.employeeId, email: routing });
+    for (const value of [doc.email, doc.notificationEmail]) {
+      const email = String(value || '').toLowerCase();
+      if (email && !SUPERADMIN_EMAILS.includes(email)) validEmails.add(email);
+    }
+  }
+  return { heads, validEmails };
+};
+
+// Rows imported in a single upload. Guards against a runaway/oversized sheet.
+const MAX_IMPORT_ROWS = 1000;
+
+// Post-parse bounds. A small compressed .xlsx can decompress into a very large
+// workbook (zip-bomb style), so reject anything with an implausible shape for an
+// employee roster before we iterate it.
+const MAX_WORKSHEETS = 12;
+const MAX_SHEET_ROWS = 20000;
+const PARSE_TIMEOUT_MS = 15000;
+
+// .xlsx is a ZIP archive — every valid file starts with the "PK" signature.
+// Verifies the actual bytes rather than trusting the extension/MIME the client
+// sent (a renamed .exe would pass those but fail here).
+const looksLikeXlsx = (buffer) =>
+  Buffer.isBuffer(buffer) && buffer.length > 4 && buffer[0] === 0x50 && buffer[1] === 0x4b;
+
+// Load with a wall-clock ceiling so a pathological workbook can't tie up the
+// request indefinitely. Rejects (caught by the caller) on parse error/timeout,
+// which also covers encrypted/password-protected workbooks ExcelJS can't open.
+const loadWorkbookWithTimeout = async (buffer) => {
+  const workbook = new ExcelJS.Workbook();
+  await Promise.race([
+    workbook.xlsx.load(buffer),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('parse-timeout')), PARSE_TIMEOUT_MS)),
+  ]);
+  return workbook;
+};
+
+const normalizeHeader = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// normalized header text -> canonical column key
+const IMPORT_HEADER_LOOKUP = (() => {
+  const lookup = new Map();
+  for (const column of IMPORT_COLUMNS) {
+    lookup.set(normalizeHeader(column.header), column.key);
+    for (const alias of column.aliases || []) lookup.set(normalizeHeader(alias), column.key);
+  }
+  return lookup;
+})();
+
+// ExcelJS cell values may be plain strings/numbers, Date objects, hyperlink or
+// rich-text objects, or formula results. Flatten any of them to trimmed text.
+const cellToString = (value) => {
+  if (value === null || value === undefined) return '';
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === 'object') {
+    if (Array.isArray(value.richText)) return value.richText.map((part) => part.text).join('').trim();
+    if (value.text !== undefined) return String(value.text).trim();
+    if (value.result !== undefined) return String(value.result).trim();
+    if (value.hyperlink !== undefined) return String(value.hyperlink).trim();
+    return '';
+  }
+  return String(value).trim();
+};
+
+// Initial credential for rows that leave Password blank. Includes a letter, a
+// symbol and hex digits so it clears the 6-char minimum with some complexity.
+const generateInitialPassword = () => `Emp@${crypto.randomBytes(4).toString('hex')}`;
+
+// @desc Download the bulk-import Excel template (with instructions + dropdowns)
+// @route GET /api/admin/employees/import/template
+export const downloadImportTemplate = asyncHandler(async (req, res) => {
+  // Always ship the full list of valid department names so the reference tab and
+  // dropdown are populated for everyone (a scoped head's own department set can
+  // be empty). The server still enforces per-row department scope on import, so
+  // a scoped head picking a department they don't manage gets a clear error.
+  const departmentOptions = [...DEPARTMENT_NAMES];
+  const { heads: reportingHeads } = await loadReportingHeads();
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Leave Management System';
+  workbook.created = new Date();
+
+  // 1) Employees — the sheet the admin fills in.
+  const sheet = workbook.addWorksheet('Employees', { views: [{ state: 'frozen', ySplit: 1 }] });
+  sheet.columns = IMPORT_COLUMNS.map((column) => ({ header: column.header, key: column.key, width: column.width }));
+
+  const headerRow = sheet.getRow(1);
+  headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } };
+  headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+  headerRow.height = 22;
+
+  // Two clearly-marked example rows the admin should delete before importing.
+  const sampleDepartment = departmentOptions[0] || 'Accounts';
+  sheet.addRow({
+    employeeId: 'EMP1001', name: 'Asha Menon', email: 'asha.menon@premindustries.in',
+    phone: '9876543210', department: sampleDepartment, designation: 'Accountant',
+    password: '', joiningDate: '2026-01-15', role: 'employee', reportingHeadEmails: '',
+  });
+  sheet.addRow({
+    employeeId: 'EMP1002', name: 'Ravi Kumar', email: '', phone: '9876500000',
+    department: sampleDepartment, designation: '', password: '', joiningDate: '',
+    role: 'employee', reportingHeadEmails: '',
+  });
+  [2, 3].forEach((rowNumber) => {
+    sheet.getRow(rowNumber).font = { italic: true, color: { argb: 'FF9CA3AF' } };
+  });
+
+  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: IMPORT_COLUMNS.length } };
+
+  // 2) Departments — reference list + source range for the Department dropdown.
+  const deptSheet = workbook.addWorksheet('Departments');
+  deptSheet.getColumn(1).width = 32;
+  deptSheet.getCell('A1').value = 'Valid Department Names';
+  deptSheet.getCell('A1').font = { bold: true };
+  departmentOptions.forEach((name, index) => {
+    deptSheet.getCell(`A${index + 2}`).value = name;
+  });
+
+  // In-cell dropdowns on the fill-in sheet for the first 500 data rows.
+  const deptColLetter = sheet.getColumn('department').letter;
+  const roleColLetter = sheet.getColumn('role').letter;
+  const lastDeptRow = departmentOptions.length + 1;
+  for (let rowNumber = 2; rowNumber <= 501; rowNumber += 1) {
+    if (departmentOptions.length) {
+      sheet.getCell(`${deptColLetter}${rowNumber}`).dataValidation = {
+        type: 'list', allowBlank: false, formulae: [`Departments!$A$2:$A$${lastDeptRow}`],
+        showErrorMessage: true, errorTitle: 'Unknown department',
+        error: 'Pick a department from the Departments tab.',
+      };
+    }
+    sheet.getCell(`${roleColLetter}${rowNumber}`).dataValidation = {
+      type: 'list', allowBlank: true, formulae: ['"employee,head"'],
+    };
+  }
+
+  // 3) Heads — reference list of the Head accounts that leave can be routed to.
+  const headSheet = workbook.addWorksheet('Heads');
+  headSheet.columns = [
+    { header: 'Head Name', key: 'name', width: 26 },
+    { header: 'Employee ID', key: 'employeeId', width: 16 },
+    { header: 'Routing Email (paste into Reporting Head Emails)', key: 'email', width: 48 },
+  ];
+  const headHeader = headSheet.getRow(1);
+  headHeader.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  headHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } };
+  headHeader.alignment = { vertical: 'middle', horizontal: 'center' };
+  if (reportingHeads.length) {
+    reportingHeads.forEach((head) => headSheet.addRow(head));
+  } else {
+    headSheet.addRow({ name: 'No reporting Head accounts are configured yet.' });
+  }
+
+  // 4) Instructions — the per-column helper.
+  const guide = workbook.addWorksheet('Instructions');
+  guide.columns = [
+    { header: 'Column', key: 'column', width: 22 },
+    { header: 'Required', key: 'required', width: 12 },
+    { header: 'Description', key: 'description', width: 62 },
+    { header: 'Example', key: 'example', width: 32 },
+  ];
+  const guideHeader = guide.getRow(1);
+  guideHeader.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  guideHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } };
+  guideHeader.alignment = { vertical: 'middle', horizontal: 'center' };
+  IMPORT_COLUMNS.forEach((column) => {
+    guide.addRow({
+      column: column.header,
+      required: column.required ? 'Required' : 'Optional',
+      description: column.description,
+      example: column.example,
+    });
+  });
+  guide.getColumn('description').alignment = { wrapText: true, vertical: 'top' };
+  guide.addRow({});
+  guide.addRow({
+    column: 'Note',
+    description: 'Delete the two grey example rows on the Employees tab before importing. Leave Password blank to auto-generate one — it appears in the import results so you can share it with the employee.',
+  });
+  guide.addRow({
+    column: 'Reporting heads',
+    description: 'Leave requests only reach a Head when the employee is routed to them. Put one or more Head routing emails (from the Heads tab) in Reporting Head Emails. If a head runs the import and leaves it blank, the employee is routed to that head automatically; a blank left by the super admin leaves the employee unassigned until a head is set.',
+  });
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="employee-import-template.xlsx"');
+  await workbook.xlsx.write(res);
+  res.end();
+});
+
+// @desc Bulk-onboard employees from an uploaded .xlsx workbook
+// @route POST /api/admin/employees/import
+export const importEmployees = asyncHandler(async (req, res) => {
+  if (!req.file || !req.file.buffer) {
+    res.status(400);
+    throw new Error('Please attach an .xlsx file to import');
+  }
+
+  // Verify the real file signature before handing the bytes to ExcelJS — the
+  // extension/MIME the browser sent are not trustworthy on their own.
+  if (!looksLikeXlsx(req.file.buffer)) {
+    res.status(400);
+    throw new Error('The uploaded file is not a valid .xlsx workbook');
+  }
+
+  let workbook;
+  try {
+    workbook = await loadWorkbookWithTimeout(req.file.buffer);
+  } catch {
+    res.status(400);
+    throw new Error('The file could not be read. It may be corrupt, encrypted or password-protected.');
+  }
+
+  // Reject workbooks whose shape is implausible for an employee roster (guards
+  // against decompression-bomb style files) before iterating any rows.
+  if (workbook.worksheets.length > MAX_WORKSHEETS) {
+    res.status(400);
+    throw new Error('This workbook has too many sheets to import');
+  }
+
+  const sheet =
+    workbook.getWorksheet('Employees') ||
+    workbook.worksheets.find((ws) => ws.actualRowCount > 1) ||
+    workbook.worksheets[0];
+  if (!sheet) {
+    res.status(400);
+    throw new Error('The workbook has no worksheets');
+  }
+  if (sheet.rowCount > MAX_SHEET_ROWS) {
+    res.status(400);
+    throw new Error(`This sheet has too many rows. Import at most ${MAX_IMPORT_ROWS} employees at a time.`);
+  }
+
+  // Map the header row to canonical column keys.
+  const columnIndex = {};
+  sheet.getRow(1).eachCell((cell, colNumber) => {
+    const key = IMPORT_HEADER_LOOKUP.get(normalizeHeader(cellToString(cell.value)));
+    if (key && !(key in columnIndex)) columnIndex[key] = colNumber;
+  });
+
+  const missingRequired = IMPORT_COLUMNS
+    .filter((column) => column.required && !(column.key in columnIndex))
+    .map((column) => column.header);
+  if (missingRequired.length) {
+    res.status(400);
+    throw new Error(
+      `The sheet is missing required column(s): ${missingRequired.join(', ')}. Download the template to see the expected headers.`
+    );
+  }
+
+  const scope = await resolveHeadScope(req.user);
+
+  // Reporting-head routing (Employee.headNotificationEmails) decides which Head
+  // sees and approves an employee's leave. validHeadEmails lets us reject typos;
+  // selfHeadEmail is the importing head's own routing address, used as the
+  // default so a head's imported staff stay inside that head's scope.
+  const { validEmails: validHeadEmails } = await loadReportingHeads();
+  const selfHeadEmail = String(req.user.notificationEmail || req.user.email || '').toLowerCase();
+
+  const results = [];
+  const seenIds = new Set();
+  const seenEmails = new Set();
+  let createdCount = 0;
+  let truncated = false;
+
+  for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
+    const row = sheet.getRow(rowNumber);
+    const raw = {};
+    let hasAnyValue = false;
+    for (const [key, colNumber] of Object.entries(columnIndex)) {
+      const text = cellToString(row.getCell(colNumber).value);
+      raw[key] = text;
+      if (text) hasAnyValue = true;
+    }
+    if (!hasAnyValue) continue; // skip fully blank rows
+
+    if (results.length >= MAX_IMPORT_ROWS) {
+      truncated = true;
+      break;
+    }
+
+    const outcome = { row: rowNumber, employeeId: raw.employeeId || '', name: raw.name || '', status: 'error', message: '' };
+    try {
+      const payload = {
+        employeeId: raw.employeeId,
+        name: raw.name,
+        email: raw.email,
+        phone: raw.phone,
+        department: raw.department,
+        designation: raw.designation,
+        password: raw.password,
+        joiningDate: raw.joiningDate,
+        role: raw.role,
+        headNotificationEmails: raw.reportingHeadEmails,
+      };
+
+      const input = normalizeEmployeeInput(payload);
+      const reportingHeads = parseReportingHeadEmails(payload);
+      const nextRole = input.role || 'employee';
+
+      if (nextRole === 'head' && !scope.isSuper) {
+        throw new Error('Only the super admin can create Head accounts');
+      }
+      if (!scopeAllowsDepartment(scope, input.department)) {
+        throw new Error('This department is outside your scope');
+      }
+      if (seenIds.has(input.employeeId)) {
+        throw new Error('Duplicate Employee ID within the file');
+      }
+      if (input.email && seenEmails.has(input.email)) {
+        throw new Error('Duplicate email within the file');
+      }
+
+      await assertUniqueEmployeeIdentity({ employeeId: input.employeeId, email: input.email });
+
+      // Resolve reporting-head routing for this row.
+      //   head row        -> heads are approvers, never routed
+      //   emails given     -> validate each against a real Head account
+      //   scoped head, blank -> route to the importing head (stay in scope)
+      //   super admin, blank  -> leave unassigned (assign a head later)
+      let headEmails;
+      if (nextRole === 'head') {
+        headEmails = undefined;
+      } else if (reportingHeads.provided && reportingHeads.emails.length) {
+        const unknown = reportingHeads.emails.filter((email) => !validHeadEmails.has(email));
+        if (unknown.length) {
+          throw new Error(`Unknown reporting head email(s): ${unknown.join(', ')}. Use an account from the Heads tab.`);
+        }
+        headEmails = reportingHeads.emails;
+      } else if (!scope.isSuper && selfHeadEmail) {
+        headEmails = [selfHeadEmail];
+      } else {
+        headEmails = [];
+      }
+
+      const passwordProvided = Boolean(input.password);
+      const password = passwordProvided ? input.password : generateInitialPassword();
+
+      const employee = await Employee.create({
+        ...input,
+        password,
+        role: nextRole,
+        ...(headEmails !== undefined ? { headNotificationEmails: headEmails } : {}),
+      });
+
+      seenIds.add(input.employeeId);
+      if (input.email) seenEmails.add(input.email);
+      createdCount += 1;
+
+      const notes = [];
+      if (!passwordProvided) notes.push('auto-generated password');
+      if (nextRole !== 'head' && (!headEmails || headEmails.length === 0)) {
+        notes.push('no reporting head assigned');
+      }
+
+      outcome.status = 'created';
+      outcome.employeeId = employee.employeeId;
+      outcome.name = employee.name;
+      outcome.message = notes.length ? `Created — ${notes.join('; ')}` : 'Created';
+      if (!passwordProvided) outcome.password = password;
+    } catch (error) {
+      outcome.status = 'error';
+      outcome.message = error.message || 'Could not import this row';
+    }
+    results.push(outcome);
+  }
+
+  res.json({
+    summary: {
+      total: results.length,
+      created: createdCount,
+      failed: results.length - createdCount,
+      truncated,
+    },
+    results,
+  });
 });

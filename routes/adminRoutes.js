@@ -12,8 +12,11 @@ import {
   deleteEmployee,
   updateEmployeeWorkDetails,
   applyLeaveOnBehalf,
+  downloadImportTemplate,
+  importEmployees,
 } from '../controllers/adminController.js';
 import { protect, adminOnly } from '../middleware/auth.js';
+import { importUpload } from '../middleware/uploadSpreadsheet.js';
 
 const router = express.Router();
 
@@ -26,6 +29,10 @@ router.post('/leaves', applyLeaveOnBehalf);
 router.patch('/leaves/:id', updateLeaveStatus);
 router.get('/employees', getEmployees);
 router.get('/heads', getApprovalHeads);
+// Bulk import — registered before the `/employees/:id` param routes so the
+// literal path segments are matched first.
+router.get('/employees/import/template', downloadImportTemplate);
+router.post('/employees/import', importUpload, importEmployees);
 router.post('/employees', createEmployee);
 router.get('/employees/:id', getEmployeeDetail);
 router.patch('/employees/:id', updateEmployee);
