@@ -431,6 +431,80 @@ export const getEmployees = asyncHandler(async (req, res) => {
   res.json({ items, total, page: Number(page), pages: Math.ceil(total / Number(limit)) });
 });
 
+// @desc Export all employees to Excel
+// @route GET /api/admin/employees/export
+export const exportEmployees = asyncHandler(async (req, res) => {
+  // Super admin exports the whole organisation (staff + Head accounts); a
+  // scoped head only gets the employees routed to their approval email.
+  const scope = await resolveHeadScope(req.user);
+  const roles = scope.isSuper ? SUPER_ADMIN_MANAGED_ROLES : STAFF_ROLES;
+  const filter = { role: { $in: roles } };
+  if (!scope.isSuper) filter._id = { $in: scope.employeeIds };
+
+  const { sort } = req.query;
+  const employees = await Employee.find(filter).sort({ employeeId: String(sort).toLowerCase() === 'desc' ? -1 : 1 });
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Leave Management System';
+  workbook.created = new Date();
+  const sheet = workbook.addWorksheet('Employees');
+
+  sheet.columns = [
+    { header: 'Employee ID', key: 'employeeId', width: 14 },
+    { header: 'Name', key: 'name', width: 24 },
+    { header: 'Email', key: 'email', width: 30 },
+    { header: 'Phone', key: 'phone', width: 16 },
+    { header: 'Department', key: 'department', width: 18 },
+    { header: 'Designation', key: 'designation', width: 20 },
+    { header: 'Role', key: 'role', width: 12 },
+    { header: 'Email Verified', key: 'emailVerified', width: 16 },
+    { header: 'Status', key: 'status', width: 12 },
+    { header: 'Joining Date', key: 'joiningDate', width: 14 },
+    { header: 'Reporting Head Emails', key: 'headNotificationEmails', width: 40 },
+  ];
+
+  sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  sheet.getRow(1).fill = {
+    type: 'pattern',
+    pattern: 'solid',
+    fgColor: { argb: 'FF1F2937' },
+  };
+  sheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+  sheet.getRow(1).height = 22;
+
+  employees.forEach((employee) => {
+    sheet.addRow({
+      employeeId: employee.employeeId,
+      name: employee.name,
+      email: employee.email || '',
+      phone: employee.phone || '',
+      department: employee.department,
+      designation: employee.designation || '',
+      role: employee.role,
+      emailVerified: employee.emailVerified ? 'Yes' : 'No',
+      status: employee.status || (employee.active ? 'ACTIVE' : 'INACTIVE'),
+      joiningDate: employee.joiningDate
+        ? new Date(employee.joiningDate).toISOString().slice(0, 10)
+        : '',
+      headNotificationEmails: (employee.headNotificationEmails || []).join(', '),
+    });
+  });
+
+  sheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: sheet.columns.length },
+  };
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  );
+  res.setHeader('Content-Disposition', `attachment; filename="employees-${stamp}.xlsx"`);
+  await workbook.xlsx.write(res);
+  res.end();
+});
+
 // @desc Add employee
 // @route POST /api/admin/employees
 export const createEmployee = asyncHandler(async (req, res) => {

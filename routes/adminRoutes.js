@@ -5,6 +5,7 @@ import {
   exportLeaves,
   updateLeaveStatus,
   getEmployees,
+  exportEmployees,
   getApprovalHeads,
   createEmployee,
   getEmployeeDetail,
@@ -33,6 +34,7 @@ router.get('/heads', getApprovalHeads);
 // literal path segments are matched first.
 router.get('/employees/import/template', downloadImportTemplate);
 router.post('/employees/import', importUpload, importEmployees);
+router.get('/employees/export', exportEmployees);
 router.post('/employees', createEmployee);
 router.get('/employees/:id', getEmployeeDetail);
 router.patch('/employees/:id', updateEmployee);
