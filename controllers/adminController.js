@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import asyncHandler from 'express-async-handler';
 import ExcelJS from 'exceljs';
 import Leave from '../models/Leave.js';
@@ -12,7 +13,7 @@ import { isBeforeTodayIST } from '../utils/dateHelpers.js';
 import { sendLeaveStatusEmail, sendPasswordResetEmail } from '../services/emailService.js';
 import { onLeaveApproved } from '../services/leaveLifecycleService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
-import { resolveHeadScope, intersectWithScope, scopeAllowsDepartment } from '../utils/headScope.js';
+import { isSuperAdmin, resolveHeadScope, intersectWithScope, scopeAllowsDepartment } from '../utils/headScope.js';
 import { normalizeDepartmentName, DEPARTMENT_NAMES, SUPERADMIN_EMAILS } from '../utils/constants.js';
 import { normalizeEmailList, validateEmailFormat } from '../utils/emailValidation.js';
 import { cascadeDeleteEmployee } from '../utils/cascadeDeleteEmployee.js';
@@ -51,6 +52,61 @@ const parseReportingHeadEmails = (payload) => {
     label: 'reporting head email',
   });
   return { provided: true, emails };
+};
+
+const parseApprovalEmployeeIds = (payload) => {
+  if (!Object.prototype.hasOwnProperty.call(payload, 'approvalEmployeeIds')) return null;
+  if (!Array.isArray(payload.approvalEmployeeIds)) {
+    throw new Error('Approval employees must be a list');
+  }
+  const ids = [...new Set(payload.approvalEmployeeIds.map(String))];
+  if (ids.some((id) => !mongoose.isValidObjectId(id))) {
+    throw new Error('One or more approval employees are invalid');
+  }
+  return ids;
+};
+
+const validateApprovalEmployees = async (ids) => {
+  if (ids === null) return null;
+  const employees = await Employee.find({
+    _id: { $in: ids },
+    active: true,
+    role: { $in: STAFF_ROLES },
+  }).select('_id department').lean();
+  if (employees.length !== ids.length) {
+    const error = new Error('One or more approval employees are unavailable');
+    error.statusCode = 400;
+    throw error;
+  }
+  return employees;
+};
+
+const syncHeadAssignments = async (head, employees, previousEmails = []) => {
+  if (employees === null) return;
+  const routingEmail = String(head.notificationEmail || head.email || '').toLowerCase();
+  const aliases = [...new Set([...previousEmails, head.email, head.notificationEmail]
+    .map((email) => String(email || '').toLowerCase()).filter(Boolean))];
+  await Employee.updateMany(
+    { role: { $in: STAFF_ROLES }, headNotificationEmails: { $in: aliases } },
+    { $pull: { headNotificationEmails: { $in: aliases } } }
+  );
+  if (employees.length) {
+    await Employee.updateMany(
+      { _id: { $in: employees.map((employee) => employee._id) } },
+      { $addToSet: { headNotificationEmails: routingEmail } }
+    );
+  }
+  const departmentNames = [...new Set(employees.map((employee) => employee.department).filter(Boolean))];
+  await Department.updateMany(
+    { heads: head._id, name: { $nin: departmentNames } },
+    { $pull: { heads: head._id } }
+  );
+  if (departmentNames.length) {
+    await Department.updateMany(
+      { name: { $in: departmentNames }, active: true },
+      { $addToSet: { heads: head._id } }
+    );
+  }
 };
 
 const normalizeEmployeeInput = (payload, { requirePassword = false } = {}) => {
@@ -96,6 +152,17 @@ const assertUniqueEmployeeIdentity = async ({ employeeId, email }, excludeId) =>
 
   if (await Employee.exists(query)) {
     const error = new Error('Employee ID or email already exists');
+    error.statusCode = 409;
+    throw error;
+  }
+};
+
+const assertUniqueHeadRoutingEmail = async (email, excludeId) => {
+  if (!email) return;
+  const filter = { role: 'head', active: true, notificationEmail: email };
+  if (excludeId) filter._id = { $ne: excludeId };
+  if (await Employee.exists(filter)) {
+    const error = new Error('This email is already used to route approvals to another Head');
     error.statusCode = 409;
     throw error;
   }
@@ -434,11 +501,9 @@ export const getEmployees = asyncHandler(async (req, res) => {
 // @desc Export all employees to Excel
 // @route GET /api/admin/employees/export
 export const exportEmployees = asyncHandler(async (req, res) => {
-  // Super admin exports the whole organisation (staff + Head accounts); a
-  // scoped head only gets the employees routed to their approval email.
+  // Employee exports contain staff only; Head accounts are managed separately.
   const scope = await resolveHeadScope(req.user);
-  const roles = scope.isSuper ? SUPER_ADMIN_MANAGED_ROLES : STAFF_ROLES;
-  const filter = { role: { $in: roles } };
+  const filter = { role: { $in: STAFF_ROLES } };
   if (!scope.isSuper) filter._id = { $in: scope.employeeIds };
 
   const { sort } = req.query;
@@ -510,9 +575,11 @@ export const exportEmployees = asyncHandler(async (req, res) => {
 export const createEmployee = asyncHandler(async (req, res) => {
   let input;
   let reportingHeads;
+  let approvalEmployeeIds;
   try {
     input = normalizeEmployeeInput(req.body, { requirePassword: true });
     reportingHeads = parseReportingHeadEmails(req.body);
+    approvalEmployeeIds = parseApprovalEmployeeIds(req.body);
   } catch (error) {
     res.status(400);
     throw error;
@@ -525,10 +592,31 @@ export const createEmployee = asyncHandler(async (req, res) => {
     res.status(403);
     throw new Error('Only the super admin can create Head accounts');
   }
+  if (approvalEmployeeIds !== null && nextRole !== 'head') {
+    res.status(400);
+    throw new Error('Approval assignments are only available for Head accounts');
+  }
+  if (nextRole === 'head' && !input.email) {
+    res.status(400);
+    throw new Error('A login email is required for a new Head account');
+  }
+  if (nextRole === 'head' && SUPERADMIN_EMAILS.includes(input.email)) {
+    res.status(403);
+    throw new Error('This email is reserved for a Super Admin account');
+  }
   assertDepartmentInScope(scope, input.department, res);
+
+  let approvalEmployees;
+  try {
+    approvalEmployees = await validateApprovalEmployees(approvalEmployeeIds);
+  } catch (error) {
+    res.status(error.statusCode || 400);
+    throw error;
+  }
 
   try {
     await assertUniqueEmployeeIdentity(input);
+    if (nextRole === 'head') await assertUniqueHeadRoutingEmail(input.email);
   } catch (error) {
     res.status(error.statusCode || 400);
     throw error;
@@ -544,6 +632,14 @@ export const createEmployee = asyncHandler(async (req, res) => {
   } catch (error) {
     throwEmployeeSaveError(error, res);
   }
+  if (nextRole === 'head') {
+    try {
+      await syncHeadAssignments(created, approvalEmployees);
+    } catch (error) {
+      await cascadeDeleteEmployee(created);
+      throw error;
+    }
+  }
   const employee = await Employee.findById(created._id);
   res.status(201).json(employee);
 });
@@ -557,6 +653,34 @@ export const getApprovalHeads = asyncHandler(async (req, res) => {
     .sort({ name: 1 })
     .lean();
   res.json({ items: heads });
+});
+
+// @desc Manage Head accounts and their employee approval assignments
+// @route GET /api/admin/heads/manage
+export const getManagedHeads = asyncHandler(async (req, res) => {
+  const heads = await Employee.find({ role: 'head', active: true })
+    .select('_id employeeId name email notificationEmail phone department designation joiningDate emailVerified role')
+    .sort({ name: 1 })
+    .lean();
+  const staff = await Employee.find({
+    role: { $in: STAFF_ROLES },
+    active: true,
+    headNotificationEmails: { $exists: true, $ne: [] },
+  }).select('_id department headNotificationEmails').lean();
+  const items = heads.map((head) => {
+    const addresses = [head.email, head.notificationEmail]
+      .map((email) => String(email || '').toLowerCase()).filter(Boolean);
+    const assigned = staff.filter((employee) =>
+      employee.headNotificationEmails?.some((email) => addresses.includes(email))
+    );
+    return {
+      ...head,
+      isSuperAdmin: isSuperAdmin(head),
+      assignedEmployeeIds: assigned.map((employee) => String(employee._id)),
+      assignedDepartments: [...new Set(assigned.map((employee) => employee.department).filter(Boolean))].sort(),
+    };
+  });
+  res.json({ items });
 });
 
 // @desc Employee detail with leaves
@@ -588,9 +712,11 @@ export const updateEmployee = asyncHandler(async (req, res) => {
 
   let input;
   let reportingHeads;
+  let approvalEmployeeIds;
   try {
     input = normalizeEmployeeInput(req.body);
     reportingHeads = parseReportingHeadEmails(req.body);
+    approvalEmployeeIds = parseApprovalEmployeeIds(req.body);
   } catch (error) {
     res.status(400);
     throw error;
@@ -618,6 +744,22 @@ export const updateEmployee = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Employee not found');
   }
+  if (approvalEmployeeIds !== null && (!scope.isSuper || employee.role !== 'head' || input.role !== 'head')) {
+    res.status(403);
+    throw new Error('Only the super admin can manage Head approval assignments');
+  }
+  if (approvalEmployeeIds !== null && isSuperAdmin(employee)) {
+    res.status(403);
+    throw new Error('Super Admin approval access is global and cannot be edited here');
+  }
+  if (employee.role === 'head' && !isSuperAdmin(employee) && SUPERADMIN_EMAILS.includes(input.email)) {
+    res.status(403);
+    throw new Error('This email is reserved for a Super Admin account');
+  }
+  if (approvalEmployeeIds !== null && !employee.notificationEmail && !input.email) {
+    res.status(400);
+    throw new Error('Add a Head email before assigning employees');
+  }
   if (input.role && String(employee._id) === String(req.user._id) && input.role !== employee.role) {
     res.status(400);
     throw new Error('You cannot change your own role from this screen');
@@ -630,12 +772,24 @@ export const updateEmployee = asyncHandler(async (req, res) => {
 
   try {
     await assertUniqueEmployeeIdentity(input, employee._id);
+    if (employee.role === 'head' && employee.email !== input.email) {
+      await assertUniqueHeadRoutingEmail(input.email, employee._id);
+    }
+  } catch (error) {
+    res.status(error.statusCode || 400);
+    throw error;
+  }
+
+  let approvalEmployees;
+  try {
+    approvalEmployees = await validateApprovalEmployees(approvalEmployeeIds);
   } catch (error) {
     res.status(error.statusCode || 400);
     throw error;
   }
 
   const previousRole = employee.role;
+  const previousHeadEmails = [employee.email, employee.notificationEmail];
   employee.employeeId = input.employeeId;
   employee.name = input.name;
   if (employee.email !== input.email) {
@@ -659,6 +813,7 @@ export const updateEmployee = asyncHandler(async (req, res) => {
   } catch (error) {
     throwEmployeeSaveError(error, res);
   }
+  await syncHeadAssignments(employee, approvalEmployees, previousHeadEmails);
 
   if (previousRole === 'dept_head' || (previousRole === 'head' && employee.role !== 'head')) {
     await Department.updateMany({ heads: employee._id }, { $pull: { heads: employee._id } });
@@ -695,6 +850,10 @@ export const deleteEmployee = asyncHandler(async (req, res) => {
   if (String(employee._id) === String(req.user._id)) {
     res.status(400);
     throw new Error('You cannot remove your own account from this screen');
+  }
+  if (isSuperAdmin(employee)) {
+    res.status(403);
+    throw new Error('Super Admin accounts cannot be removed');
   }
 
   assertEmployeeInScope(scope, employee._id, res);
@@ -958,7 +1117,7 @@ const IMPORT_COLUMNS = [
   },
   {
     key: 'role', header: 'Role', required: false, width: 12, example: 'employee',
-    description: 'employee or head. Only the super admin may create head accounts.',
+    description: 'Employee imports create employee accounts. Head accounts are managed on the Heads page.',
     aliases: ['userrole', 'accountrole', 'accesslevel'],
   },
   {
@@ -1283,8 +1442,8 @@ export const importEmployees = asyncHandler(async (req, res) => {
       const reportingHeads = parseReportingHeadEmails(payload);
       const nextRole = input.role || 'employee';
 
-      if (nextRole === 'head' && !scope.isSuper) {
-        throw new Error('Only the super admin can create Head accounts');
+      if (raw.role && String(raw.role).trim().toLowerCase() !== 'employee') {
+        throw new Error('Create Head accounts on the Heads page');
       }
       if (!scopeAllowsDepartment(scope, input.department)) {
         throw new Error('This department is outside your scope');
@@ -1299,14 +1458,11 @@ export const importEmployees = asyncHandler(async (req, res) => {
       await assertUniqueEmployeeIdentity({ employeeId: input.employeeId, email: input.email });
 
       // Resolve reporting-head routing for this row.
-      //   head row        -> heads are approvers, never routed
       //   emails given     -> validate each against a real Head account
       //   scoped head, blank -> route to the importing head (stay in scope)
       //   super admin, blank  -> leave unassigned (assign a head later)
       let headEmails;
-      if (nextRole === 'head') {
-        headEmails = undefined;
-      } else if (reportingHeads.provided && reportingHeads.emails.length) {
+      if (reportingHeads.provided && reportingHeads.emails.length) {
         const unknown = reportingHeads.emails.filter((email) => !validHeadEmails.has(email));
         if (unknown.length) {
           throw new Error(`Unknown reporting head email(s): ${unknown.join(', ')}. Use an account from the Heads tab.`);
