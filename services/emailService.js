@@ -4,6 +4,7 @@ import {
   leaveAppliedAdminTemplate,
   leaveStatusUpdateTemplate,
   emailVerificationTemplate,
+  passwordResetTemplate,
   weeklyHeadDigestTemplate,
   leaveApprovedHeadNoticeTemplate,
   leaveReversedTemplate,
@@ -132,6 +133,13 @@ export const sendVerificationCodeEmail = async ({ employee, code, expiresInMinut
     html: emailVerificationTemplate({ employee, code, expiresInMinutes }),
   });
 };
+
+export const sendPasswordResetEmail = async ({ employee, password }) =>
+  sendMail({
+    to: employee.email,
+    subject: 'Your Leave Portal password has been reset',
+    html: passwordResetTemplate({ employee, password }),
+  });
 
 // Notify other mapped Heads after an approval.
 export const sendLeaveApprovedHeadNotice = async ({ heads, employee, leave, approvedBy }) => {

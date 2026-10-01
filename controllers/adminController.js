@@ -9,7 +9,7 @@ import Holiday from '../models/Holiday.js';
 import { calculateDays, datesOverlap } from '../utils/calculateDays.js';
 import { assessDepartmentStaffing } from '../utils/staffingCoverage.js';
 import { isBeforeTodayIST } from '../utils/dateHelpers.js';
-import { sendLeaveStatusEmail } from '../services/emailService.js';
+import { sendLeaveStatusEmail, sendPasswordResetEmail } from '../services/emailService.js';
 import { onLeaveApproved } from '../services/leaveLifecycleService.js';
 import { leaveTypeLabel } from '../utils/leaveTypes.js';
 import { resolveHeadScope, intersectWithScope, scopeAllowsDepartment } from '../utils/headScope.js';
@@ -580,9 +580,10 @@ export const getEmployeeDetail = asyncHandler(async (req, res) => {
 // @desc Update employee profile and employment details
 // @route PATCH /api/admin/employees/:id
 export const updateEmployee = asyncHandler(async (req, res) => {
-  if (Object.prototype.hasOwnProperty.call(req.body, 'password')) {
+  const scope = await resolveHeadScope(req.user);
+  if (Object.prototype.hasOwnProperty.call(req.body, 'password') && !scope.isSuper) {
     res.status(403);
-    throw new Error('Password can only be changed by the employee from their profile');
+    throw new Error('Only the super admin can reset an employee password');
   }
 
   let input;
@@ -595,10 +596,17 @@ export const updateEmployee = asyncHandler(async (req, res) => {
     throw error;
   }
 
-  const scope = await resolveHeadScope(req.user);
   if (input.role === 'head' && !scope.isSuper) {
     res.status(403);
     throw new Error('Only the super admin can create or edit Head accounts');
+  }
+  if (input.password && !input.email) {
+    res.status(400);
+    throw new Error('Add an employee email before resetting their password');
+  }
+  if (input.password && (!process.env.SMTP_USER || !process.env.SMTP_PASS)) {
+    res.status(503);
+    throw new Error('Email delivery is not configured. The password was not changed');
   }
   const managedRoles = scope.isSuper ? SUPER_ADMIN_MANAGED_ROLES : STAFF_ROLES;
   const employee = await Employee.findOne({
@@ -642,6 +650,7 @@ export const updateEmployee = asyncHandler(async (req, res) => {
   employee.designation = input.designation;
   employee.role = scope.isSuper && input.role ? input.role : employee.role;
   if (input.joiningDate) employee.joiningDate = input.joiningDate;
+  if (input.password) employee.password = input.password;
   // Reporting heads drive leave-approval routing. Only overwrite when the
   // caller explicitly sent the field so unrelated edits don't clear it.
   if (reportingHeads.provided) employee.headNotificationEmails = reportingHeads.emails;
@@ -655,7 +664,17 @@ export const updateEmployee = asyncHandler(async (req, res) => {
     await Department.updateMany({ heads: employee._id }, { $pull: { heads: employee._id } });
   }
 
-  res.json(await Employee.findById(employee._id));
+  const updatedEmployee = await Employee.findById(employee._id);
+  if (!input.password) {
+    res.json(updatedEmployee);
+    return;
+  }
+
+  const mailResult = await sendPasswordResetEmail({ employee: updatedEmployee, password: input.password });
+  res.json({
+    ...updatedEmployee.toObject(),
+    passwordResetEmail: mailResult?.error || mailResult?.skipped ? 'failed' : 'sent',
+  });
 });
 
 // @desc Permanently delete an employee and every record tied to them

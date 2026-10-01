@@ -6,6 +6,14 @@ const baseStyles = `
   line-height: 1.6;
 `;
 
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+})[character]);
+
 const wrap = (content) => `
 <!DOCTYPE html>
 <html>
@@ -66,6 +74,16 @@ export const emailVerificationTemplate = ({ employee, code, expiresInMinutes }) 
       <span style="display:inline-block;font-family:'SFMono-Regular',Consolas,Menlo,monospace;font-size:32px;letter-spacing:10px;font-weight:700;color:#4f46e5;background:#eef2ff;padding:14px 22px;border-radius:12px;border:1px solid #e0e7ff;">${code}</span>
     </p>
     <p style="font-size:14px;color:#6b7280;">This code expires in ${expiresInMinutes} minutes. If you did not request it, you can safely ignore this message.</p>
+  `);
+
+export const passwordResetTemplate = ({ employee, password }) =>
+  wrap(`
+    <h2 style="margin-top:0;">Hi ${escapeHtml(employee.name)},</h2>
+    <p>A Super Admin reset your Prem Industries Leave Portal password.</p>
+    <p><b>Employee ID:</b> ${escapeHtml(employee.employeeId)}</p>
+    <p><b>New password:</b> <span style="font-family:Consolas,Menlo,monospace;">${escapeHtml(password)}</span></p>
+    <p>Sign in with this password, then open <b>Profile &gt; Change Password</b> and set a password only you know.</p>
+    <p>If you did not expect this reset, contact your administrator.</p>
   `);
 
 export const leaveStatusUpdateTemplate = ({ employee, leave }) => {
